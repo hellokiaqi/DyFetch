@@ -38,7 +38,7 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 
 | 功能 | V1.0 (DouYinCommand.py) | V2.0 (downloader.py) |
 |------|------------------------|---------------------|
-| 单个视频下载 | ✅ 完全正常 | ⚠️ API 问题 |
+| 单个视频下载 | ✅ 完全正常 | ✅ 可用（已增强重试与兜底） |
 | 用户主页下载 | ✅ 正常 | ✅ 完全正常 |
 | Cookie 管理 | 手动配置 | 自动获取 |
 | 使用复杂度 | 简单 | 中等 |

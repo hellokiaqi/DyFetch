@@ -23,6 +23,10 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
+    async_playwright = None
+    Browser = Any
+    BrowserContext = Any
+    Page = Any
     logger.warning("Playwright未安装，自动Cookie管理不可用")
 
 

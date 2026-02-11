@@ -334,7 +334,16 @@ class Douyin(object):
                         self.console.print(f"[yellow]🔍 可用字段: {list(datadict.keys())}[/]")
                         break
 
-                    current_count = len(datadict["aweme_list"])
+                    # aweme_list may be null in some responses; normalize to avoid len(None).
+                    aweme_items = datadict.get("aweme_list")
+                    if aweme_items is None:
+                        self.console.print("[yellow][WARN] aweme_list is null, treat as empty list[/]")
+                        aweme_items = []
+                    elif not isinstance(aweme_items, list):
+                        self.console.print(f"[red]❌ aweme_list type error: {type(aweme_items)}[/]")
+                        break
+
+                    current_count = len(aweme_items)
                     total_fetched += current_count
                     
                     # 更新进度显示
@@ -344,7 +353,7 @@ class Douyin(object):
                     )
 
                     # 在处理作品时添加时间过滤
-                    for aweme in datadict["aweme_list"]:
+                    for aweme in aweme_items:
                         create_time = time.strftime(
                             "%Y-%m-%d", 
                             time.localtime(int(aweme.get("create_time", 0)))
@@ -384,12 +393,15 @@ class Douyin(object):
                             awemeList.append(aweme_data)
 
                     # 检查是否还有更多数据
-                    if not datadict["has_more"]:
+                    if not datadict.get("has_more", False):
                         self.console.print(f"[green]✅ 已获取全部作品: {total_fetched}个[/]")
                         break
                     
                     # 更新游标
-                    max_cursor = datadict["max_cursor"]
+                    next_cursor = datadict.get("max_cursor", max_cursor)
+                    if next_cursor == max_cursor:
+                        break
+                    max_cursor = next_cursor
                     
                 except Exception as e:
                     self.console.print(f"[red]❌ 获取作品列表出错: {str(e)}[/]")
@@ -561,7 +573,15 @@ class Douyin(object):
                         self.console.print(f"[yellow]🔍 可用字段: {list(datadict.keys())}[/]")
                         break
 
-                    for aweme in datadict["aweme_list"]:
+                    aweme_items = datadict.get("aweme_list")
+                    if aweme_items is None:
+                        self.console.print("[yellow][WARN] mix aweme_list is null, treat as empty list[/]")
+                        aweme_items = []
+                    elif not isinstance(aweme_items, list):
+                        self.console.print(f"[red]❌ aweme_list type error: {type(aweme_items)}[/]")
+                        break
+
+                    for aweme in aweme_items:
                         create_time = time.strftime(
                             "%Y-%m-%d",
                             time.localtime(int(aweme.get("create_time", 0)))
@@ -596,7 +616,7 @@ class Douyin(object):
 
                     # 更新游标
                     cursor = datadict.get("cursor", 0)
-                    total_fetched += len(datadict["aweme_list"])
+                    total_fetched += len(aweme_items)
                     progress.update(fetch_task, description=f"[cyan]📥 已获取: {total_fetched}个作品")
 
                 except Exception as e:

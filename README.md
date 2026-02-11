@@ -61,6 +61,11 @@ python get_cookies_manual.py
 - 🚀 **异步架构**：性能更优，支持并发下载
 - 🚀 **智能重试**：自动重试和错误恢复
 - 🚀 **增量下载**：支持增量更新，避免重复下载
+- ✅ **用户主页抓取修复**：修复分页参数签名问题，避免 `aweme_list=null` 导致抓取为 0
+- ✅ **Cookie 兜底增强**：支持自动合并 `config` / `cookies.txt` / `cookies.pkl`，降低失效概率
+- ✅ **图文下载兜底**：同一图片多 URL 自动回退，减少 403 导致的失败
+- ✅ **路径兼容增强**：自动清洗 Windows 非法文件名字符（如 `<>:"/\\|?*`）
+- ✅ **失败统计更准确**：封面/音乐等可选资源失败不再计入主任务失败
 - ✅ **单个视频下载**：可用（已增强重试与兜底）
 - ✅ **用户主页下载**：完全正常工作
 
@@ -160,6 +165,9 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 # 指定保存路径
 python downloader.py -u "链接" --path "./my_videos/"
 
+# 全量下载某个用户（请将 number.post 设为 0）
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx" --path "./my_videos/"
+
 # 使用配置文件
 python downloader.py --config
 ```
@@ -220,9 +228,18 @@ python downloader.py [选项] [链接...]
   -p, --path PATH        保存路径
   -c, --config           使用配置文件
   --auto-cookie          自动获取 Cookie
-  --cookies COOKIES      手动指定 Cookie
+  --cookie COOKIE        手动指定 Cookie
   -h, --help            显示帮助信息
 ```
+
+### 失败补下载（推荐）
+
+当你看到“总数已找到，但有少量失败（如 11 个）”时，按下面流程补齐：
+
+1. 确认 `config_simple.yml` 中 `number.post: 0`（表示全量抓取）。
+2. 使用同一条用户主页命令再次执行（路径保持不变）。
+3. 程序会自动跳过已存在文件，只重试未成功的作品。
+4. 若仍有失败，优先检查 `downloader.log` 中是否为源站 `403`，此类通常会在多 URL 回退后自动恢复一部分。
 
 ## 🍪 Cookie 配置工具
 
@@ -342,6 +359,13 @@ python cookie_extractor.py
 - V1.0：在 `config.yml` 中添加多个链接
 - V2.0：使用命令行传入多个链接或使用配置文件
 
+### Q: 总共找到了 168 个，但失败了 11 个怎么办？
+**A**:
+- 先确认 `number.post: 0`，避免被数量限制截断。
+- 直接用同一命令再跑一次（同一个 `--path`）。
+- 该项目支持断点式补下载：已下载文件会自动跳过，失败项会重新尝试。
+- 新版已增加图片多 URL 回退和 Cookie 兜底，通常重跑后失败数会明显下降。
+
 ### Q: 支持哪些格式？
 **A**: 
 - 视频：MP4 格式（无水印）
@@ -355,6 +379,7 @@ python cookie_extractor.py
 - ✅ **请求签名升级**：用户作品列表与单作品详情接入新版 X-Bogus 签名路径
 - ✅ **抓取完整性增强**：补充置顶项合并与多级兜底（IES / HTML / Playwright）
 - ✅ **下载稳定性增强**：支持多 URL 回退、重定向处理、403/429 退避
+- ✅ **用户主页零结果修复**：修复 `aweme_list=null` 场景下的抓取链路与 Cookie 兜底
 - ✅ **路径兼容性增强**：Windows 文件名与长路径处理优化
 - ✅ **图文片段视频支持**：图文中含视频片段时优先下载为 `clip_<index>.mp4`
 

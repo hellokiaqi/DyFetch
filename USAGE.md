@@ -32,6 +32,9 @@ python downloader.py -u "https://www.douyin.com/user/xxxxx"
 
 # 自动获取 Cookie 并下载
 python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
+
+# 全量下载并指定输出目录（请确保 number.post=0）
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx" --path "./my_videos/"
 ```
 
 ## 📋 版本对比
@@ -41,6 +44,8 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 | 单个视频下载 | ✅ 完全正常 | ✅ 可用（已增强重试与兜底） |
 | 用户主页下载 | ✅ 正常 | ✅ 完全正常 |
 | Cookie 管理 | 手动配置 | 自动获取 |
+| Cookie 兜底 | ❌ | ✅ 自动合并 config/cookies.txt/cookies.pkl |
+| 图文 403 处理 | 一般 | ✅ 多 URL 自动回退 |
 | 使用复杂度 | 简单 | 中等 |
 | 稳定性 | 高 | 中等 |
 
@@ -54,4 +59,13 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 ## 📞 获取帮助
 
 - 查看详细文档：`README.md`
-- 报告问题：[GitHub Issues](https://github.com/jiji262/douyin-downloader/issues) 
+- 报告问题：[GitHub Issues](https://github.com/jiji262/douyin-downloader/issues)
+
+## 🔁 失败补下载
+
+如果出现“已找到全部作品，但少量失败（例如 11 个）”，按这个流程处理：
+
+1. 在 `config_simple.yml` 中设置 `number.post: 0`（全量）。
+2. 使用同一条命令再次运行，保持同一个 `--path`。
+3. 程序会自动跳过已下载文件，只补失败项。
+4. 若仍有失败，查看 `downloader.log` 中对应状态码（常见为 403），再重跑一次通常还能补齐一部分。

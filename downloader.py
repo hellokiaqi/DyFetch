@@ -666,10 +666,18 @@ class UnifiedDownloader:
             if is_image:
                 images = video_info.get('images', [])
                 for i, image_info in enumerate(images):
+                    clip_urls = self._get_image_clip_url_candidates(image_info)
+                    if clip_urls:
+                        clip_path = save_dir / f"clip_{i+1}.mp4"
+                        if await self._download_first_success(clip_urls, clip_path, required=False):
+                            logger.info(f"Downloaded clip {i+1}/{len(images)}: {clip_path.name}")
+                            continue
+                        logger.warning(f"Clip {i+1}/{len(images)} failed, fallback to image")
+
                     image_urls = self._get_image_url_candidates(image_info)
-                    file_path = save_dir / f"image_{i+1}.jpg"
-                    if image_urls and await self._download_first_success(image_urls, file_path, required=True):
-                        logger.info(f"Downloaded image {i+1}/{len(images)}: {file_path.name}")
+                    image_path = save_dir / f"image_{i+1}.jpg"
+                    if image_urls and await self._download_first_success(image_urls, image_path, required=True):
+                        logger.info(f"Downloaded image {i+1}/{len(images)}: {image_path.name}")
                     else:
                         logger.error(f"Failed to download image {i+1}/{len(images)}")
                         success = False
@@ -727,31 +735,83 @@ class UnifiedDownloader:
             logger.warning(f"Candidate URL {idx} failed for {save_path.name}")
         return False
 
+    def _extract_addr_url_candidates(self, addr: Any) -> List[str]:
+        """Extract URL candidates from an address object."""
+        if not isinstance(addr, dict):
+            return []
+        url_list = addr.get('url_list') or []
+        if not isinstance(url_list, list):
+            return []
+
+        candidates: List[str] = []
+        for url in url_list:
+            if not isinstance(url, str):
+                continue
+            u = url.strip()
+            if not u:
+                continue
+            if 'playwm' in u:
+                candidates.append(u.replace('playwm', 'play'))
+            candidates.append(u)
+        return self._unique_urls(candidates)
+
+    def _is_watermark_like_url(self, url: str) -> bool:
+        """Heuristic check whether an URL is likely watermarked."""
+        lowered = (url or '').lower()
+        markers = (
+            'tplv-dy-water',
+            'playwm',
+            'watermark',
+            'download_suffix_logo',
+            '/logo/',
+        )
+        return any(marker in lowered for marker in markers)
+
+    def _prefer_non_watermark_urls(self, urls: List[str]) -> List[str]:
+        """Keep original order but move likely-watermarked URLs to the end."""
+        clean: List[str] = []
+        fallback: List[str] = []
+        for url in self._unique_urls(urls):
+            if self._is_watermark_like_url(url):
+                fallback.append(url)
+            else:
+                clean.append(url)
+        return clean + fallback
+
+    def _get_image_clip_url_candidates(self, image_info: Dict) -> List[str]:
+        """Get candidate clip URLs for image posts that contain video fragments."""
+        if not isinstance(image_info, dict):
+            return []
+        video = image_info.get('video') or {}
+        if not isinstance(video, dict):
+            return []
+
+        candidates: List[str] = []
+        for key in ('play_addr_h264', 'play_addr', 'play_addr_lowbr', 'download_addr', 'download_suffix_logo_addr'):
+            candidates.extend(self._extract_addr_url_candidates(video.get(key) or {}))
+        return self._prefer_non_watermark_urls(candidates)
+
     def _get_image_url_candidates(self, image_info: Dict) -> List[str]:
         """Get candidate image URLs in preferred order."""
+        if not isinstance(image_info, dict):
+            return []
         candidates: List[str] = []
-        for key in ('watermark_free_download_url_list', 'download_url_list', 'url_list'):
+        for key in ('watermark_free_download_url_list', 'url_list', 'download_url_list'):
             value = image_info.get(key) or []
             if isinstance(value, list):
                 candidates.extend(value)
-        return self._unique_urls(candidates)
+        return self._prefer_non_watermark_urls(candidates)
 
     def _get_video_url_candidates(self, video_info: Dict) -> List[str]:
         """Get candidate video URLs with no-watermark variants first."""
         video = video_info.get('video', {}) or {}
+        if not isinstance(video, dict):
+            return []
+
         candidates: List[str] = []
-        for key in ('play_addr_h264', 'play_addr', 'download_addr'):
-            addr = video.get(key) or {}
-            url_list = addr.get('url_list') or []
-            if not isinstance(url_list, list):
-                continue
-            for url in url_list:
-                if not isinstance(url, str):
-                    continue
-                if 'playwm' in url:
-                    candidates.append(url.replace('playwm', 'play'))
-                candidates.append(url)
-        return self._unique_urls(candidates)
+        for key in ('play_addr_h264', 'play_addr', 'play_addr_lowbr', 'download_addr', 'download_suffix_logo_addr'):
+            candidates.extend(self._extract_addr_url_candidates(video.get(key) or {}))
+        return self._prefer_non_watermark_urls(candidates)
 
     def _get_music_url_candidates(self, video_info: Dict) -> List[str]:
         music = video_info.get('music', {}) or {}

@@ -37,6 +37,12 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx" --path "./my_videos/"
 ```
 
+### 图文/片段作品输出规则（V2.1）
+
+- `clip_<index>.mp4`：图文作品中的视频片段下载成功时输出
+- `image_<index>.jpg`：纯图片，或片段 URL 全部失败后的回退结果
+- 下载器会优先尝试非水印地址；如果源站未提供无水印地址，回退结果可能带水印
+
 ## 📋 版本对比
 
 | 功能 | V1.0 (DouYinCommand.py) | V2.0 (downloader.py) |
@@ -46,6 +52,8 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx"
 | Cookie 管理 | 手动配置 | 自动获取 |
 | Cookie 兜底 | ❌ | ✅ 自动合并 config/cookies.txt/cookies.pkl |
 | 图文 403 处理 | 一般 | ✅ 多 URL 自动回退 |
+| 图文片段视频 | ❌ | ✅ 优先下载 `clip_<index>.mp4`，失败回退 `image_<index>.jpg` |
+| 水印控制策略 | 一般 | ✅ 优先非水印地址，必要时回退可用地址 |
 | 使用复杂度 | 简单 | 中等 |
 | 稳定性 | 高 | 中等 |
 
@@ -69,3 +77,4 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx"
 2. 使用同一条命令再次运行，保持同一个 `--path`。
 3. 程序会自动跳过已下载文件，只补失败项。
 4. 若仍有失败，查看 `downloader.log` 中对应状态码（常见为 403），再重跑一次通常还能补齐一部分。
+5. 若某些图文作品目录下只有 `image_<index>.jpg` 没有 `clip_<index>.mp4`，通常表示该片段未返回可用视频地址或被源站限制。

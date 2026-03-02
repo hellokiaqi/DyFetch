@@ -1,8 +1,21 @@
 # 抖音下载器 - 无水印批量下载工具
 
+python downloader.py -c config_simple.yml -u "你的链接" --path "./my_videos_fix/"
+
+## 小周咕噜噜
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAAe2OKCXsdJd--ZuSqE0-a955QNWcMxsOBUALAtDAVH8aYdaJ8scrt3b94yNmV_-Au?from_tab_name=main&is_search=1&list_name=follow&nt=0" --path "./my_videos_fix/"
+
+
 ![douyin-downloader](https://socialify.git.ci/jiji262/douyin-downloader/image?custom_description=%E6%8A%96%E9%9F%B3%E6%89%B9%E9%87%8F%E4%B8%8B%E8%BD%BD%E5%B7%A5%E5%85%B7%EF%BC%8C%E5%8E%BB%E6%B0%B4%E5%8D%B0%EF%BC%8C%E6%94%AF%E6%8C%81%E8%A7%86%E9%A2%91%E3%80%81%E5%9B%BE%E9%9B%86%E3%80%81%E5%90%88%E9%9B%86%E3%80%81%E9%9F%B3%E4%B9%90%28%E5%8E%9F%E5%A3%B0%29%E3%80%82%0A%E5%85%8D%E8%B4%B9%EF%BC%81%E5%85%8D%E8%B4%B9%EF%BC%81%E5%85%8D%E8%B4%B9%EF%BC%81&description=1&font=Jost&forks=1&logo=https%3A%2F%2Fraw.githubusercontent.com%2Fjiji262%2Fdouyin-downloader%2Frefs%2Fheads%2Fmain%2Fimg%2Flogo.png&name=1&owner=1&pattern=Circuit+Board&pulls=1&stargazers=1&theme=Light)
 
 一个功能强大的抖音内容批量下载工具，支持视频、图集、音乐、直播等多种内容类型的下载。提供两个版本：V1.0（稳定版）和 V2.0（增强版）。
+
+## 📢 最近更新（2026-02）
+
+- ✅ 用户主页抓取链路增强：分页抓取 + 多级兜底（API / HTML / Playwright）提高完整性
+- ✅ 图文作品下载策略调整：图文内含片段视频时优先下载 `clip_<index>.mp4`
+- ✅ 图文资源自动回退：片段失败自动回退图片，单条失败不影响整批任务继续
+- ✅ URL 候选优化：优先尝试非水印地址；仅在无可用无水印地址时回退带水印资源
 
 ## 📋 目录
 
@@ -61,11 +74,6 @@ python get_cookies_manual.py
 - 🚀 **异步架构**：性能更优，支持并发下载
 - 🚀 **智能重试**：自动重试和错误恢复
 - 🚀 **增量下载**：支持增量更新，避免重复下载
-- ✅ **用户主页抓取修复**：修复分页参数签名问题，避免 `aweme_list=null` 导致抓取为 0
-- ✅ **Cookie 兜底增强**：支持自动合并 `config` / `cookies.txt` / `cookies.pkl`，降低失效概率
-- ✅ **图文下载兜底**：同一图片多 URL 自动回退，减少 403 导致的失败
-- ✅ **路径兼容增强**：自动清洗 Windows 非法文件名字符（如 `<>:"/\\|?*`）
-- ✅ **失败统计更准确**：封面/音乐等可选资源失败不再计入主任务失败
 - ✅ **单个视频下载**：可用（已增强重试与兜底）
 - ✅ **用户主页下载**：完全正常工作
 
@@ -165,9 +173,6 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 # 指定保存路径
 python downloader.py -u "链接" --path "./my_videos/"
 
-# 全量下载某个用户（请将 number.post 设为 0）
-python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx" --path "./my_videos/"
-
 # 使用配置文件
 python downloader.py --config
 ```
@@ -228,18 +233,9 @@ python downloader.py [选项] [链接...]
   -p, --path PATH        保存路径
   -c, --config           使用配置文件
   --auto-cookie          自动获取 Cookie
-  --cookie COOKIE        手动指定 Cookie
+  --cookies COOKIES      手动指定 Cookie
   -h, --help            显示帮助信息
 ```
-
-### 失败补下载（推荐）
-
-当你看到“总数已找到，但有少量失败（如 11 个）”时，按下面流程补齐：
-
-1. 确认 `config_simple.yml` 中 `number.post: 0`（表示全量抓取）。
-2. 使用同一条用户主页命令再次执行（路径保持不变）。
-3. 程序会自动跳过已存在文件，只重试未成功的作品。
-4. 若仍有失败，优先检查 `downloader.log` 中是否为源站 `403`，此类通常会在多 URL 回退后自动恢复一部分。
 
 ## 🍪 Cookie 配置工具
 
@@ -359,12 +355,19 @@ python cookie_extractor.py
 - V1.0：在 `config.yml` 中添加多个链接
 - V2.0：使用命令行传入多个链接或使用配置文件
 
-### Q: 总共找到了 168 个，但失败了 11 个怎么办？
+### Q: 已找到全部作品，但还有少量失败怎么办？
 **A**:
-- 先确认 `number.post: 0`，避免被数量限制截断。
-- 直接用同一命令再跑一次（同一个 `--path`）。
-- 该项目支持断点式补下载：已下载文件会自动跳过，失败项会重新尝试。
-- 新版已增加图片多 URL 回退和 Cookie 兜底，通常重跑后失败数会明显下降。
+- 先确认 `config_simple.yml` 中 `number.post: 0`（全量抓取）
+- 使用同一条命令重跑，并保持同一个 `--path`
+- 程序会自动跳过已下载文件，只重试失败项
+- 若仍失败，查看 `downloader.log` 中状态码（常见 403/429），稍后重跑通常可补齐一部分
+
+### Q: 为什么有些“多片段视频”会下载成图片，而且可能带水印？
+**A**:
+- 图文作品按“片段优先，图片兜底”处理：优先下载 `clip_<index>.mp4`
+- 若该片段没有可用视频地址，或片段 URL 全部失败，会回退为 `image_<index>.jpg`
+- 水印取决于源站返回：若无可用无水印地址，会回退到可用地址（可能带水印）
+- 建议保持完整 Cookie（尤其 `msToken`）并用同一路径重跑补齐
 
 ### Q: 支持哪些格式？
 **A**: 
@@ -379,9 +382,9 @@ python cookie_extractor.py
 - ✅ **请求签名升级**：用户作品列表与单作品详情接入新版 X-Bogus 签名路径
 - ✅ **抓取完整性增强**：补充置顶项合并与多级兜底（IES / HTML / Playwright）
 - ✅ **下载稳定性增强**：支持多 URL 回退、重定向处理、403/429 退避
-- ✅ **用户主页零结果修复**：修复 `aweme_list=null` 场景下的抓取链路与 Cookie 兜底
+- ✅ **图文资源策略优化**：图文中含视频片段时优先下载 `clip_<index>.mp4`，失败自动回退图片
 - ✅ **路径兼容性增强**：Windows 文件名与长路径处理优化
-- ✅ **图文片段视频支持**：图文中含视频片段时优先下载为 `clip_<index>.mp4`
+- ℹ️ **水印说明**：当平台仅返回带水印资源时会自动兜底下载，尽量保证可用性
 
 ### V2.0 (2025-08)
 - ✅ **统一入口**：整合所有功能到 `downloader.py`

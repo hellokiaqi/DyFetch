@@ -5,3 +5,4 @@ my_videos_fix/
 *.db
 *.log
 cookies.pkl
+ui_history.json

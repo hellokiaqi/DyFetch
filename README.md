@@ -233,9 +233,22 @@ python downloader.py [选项] [链接...]
   -p, --path PATH        保存路径
   -c, --config           使用配置文件
   --auto-cookie          自动获取 Cookie
-  --cookies COOKIES      手动指定 Cookie
+  --cookie COOKIE        手动指定 Cookie
   -h, --help            显示帮助信息
 ```
+
+### 简易 UI（推荐）
+
+```bash
+python downloader_ui.py
+```
+
+- 可直接输入 URL / 配置文件 / 输出目录并一键运行
+- 自动保存历史记录到 `ui_history.json`
+- 历史记录会保存并显示 `user_id`，可直接点选复用，不用重复找链接
+- `Username` 改为手动维护：在 `Manual Username` 输入昵称后，点击 `Set Name` 写入当前记录
+- 不再自动请求真实昵称，避免 `Refresh` 时出现接口重试提示导致卡顿
+- `Saved Records` 支持横向滚动，长链接可左右拖动查看
 
 ## 🍪 Cookie 配置工具
 

@@ -37,6 +37,19 @@ python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx" --path "./my_videos/"
 ```
 
+### 4. 用简易 UI 运行（省事）
+
+```bash
+python downloader_ui.py
+```
+
+- 支持一键运行 `downloader.py`，不需要手敲整条命令
+- 自动记录 URL、配置路径、输出路径
+- 自动提取并保存 `user_id`，后续可直接选择复用
+- `Username` 为手动维护：在 `Manual Username` 输入昵称后，点 `Set Name` 写入选中记录
+- `Refresh` 仅刷新本地记录，不再自动请求昵称，避免接口重试刷屏
+- `Saved Records` 支持横向滚动，长 URL 可左右拖动查看
+
 ### 图文/片段作品输出规则（V2.1）
 
 - `clip_<index>.mp4`：图文作品中的视频片段下载成功时输出

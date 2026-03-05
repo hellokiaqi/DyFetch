@@ -16,6 +16,7 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLj
 - ✅ 图文作品下载策略调整：图文内含片段视频时优先下载 `clip_<index>.mp4`
 - ✅ 图文资源自动回退：片段失败自动回退图片，单条失败不影响整批任务继续
 - ✅ URL 候选优化：优先尝试非水印地址；仅在无可用无水印地址时回退带水印资源
+- ✅ 新增视频切帧：对下载到的所有视频（含普通视频与 `clip_<index>.mp4`）按每秒 10 帧输出 JPG
 
 ## 📋 目录
 
@@ -36,6 +37,7 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLj
 
 - **Python 3.9+**
 - **操作系统**：Windows、macOS、Linux
+- **ffmpeg（可选）**：用于视频切帧；未安装时会自动尝试安装 `imageio-ffmpeg`
 
 ### 安装步骤
 
@@ -201,6 +203,12 @@ music: true
 cover: true
 avatar: true
 json: true
+slice_videos: true      # 视频切帧（普通视频 + 图文片段）
+slice_fps: 10          # 每秒截图次数
+slice_subdir: frames   # 每条作品下统一的切帧子目录
+slice_backfill_on_run: false  # 运行时补切旧目录（有视频且无切片目录）
+auto_install_ffmpeg: true  # ffmpeg 缺失时自动安装 imageio-ffmpeg
+# ffmpeg_bin: ffmpeg   # 可选：自定义 ffmpeg 路径
 
 # 下载模式
 mode:
@@ -240,15 +248,16 @@ python downloader.py [选项] [链接...]
 ### 简易 UI（推荐）
 
 ```bash
-python downloader_ui.py
+python ui.py
 ```
 
 - 可直接输入 URL / 配置文件 / 输出目录并一键运行
 - 自动保存历史记录到 `ui_history.json`
 - 历史记录会保存并显示 `user_id`，可直接点选复用，不用重复找链接
-- `Username` 改为手动维护：在 `Manual Username` 输入昵称后，点击 `Set Name` 写入当前记录
+- `Username` 改为手动维护：选中记录后点击 `Set Name` 手动填写昵称
 - 不再自动请求真实昵称，避免 `Refresh` 时出现接口重试提示导致卡顿
 - `Saved Records` 支持横向滚动，长链接可左右拖动查看
+- 支持勾选“Backfill slices for old video folders”，下载前自动补切旧视频目录（有视频但无 `frames/`）
 
 ## 🍪 Cookie 配置工具
 
@@ -379,6 +388,9 @@ python cookie_extractor.py
 **A**:
 - 图文作品按“片段优先，图片兜底”处理：优先下载 `clip_<index>.mp4`
 - 若该片段没有可用视频地址，或片段 URL 全部失败，会回退为 `image_<index>.jpg`
+- 视频下载成功后会在同一作品目录下生成 `frames/` 子目录：
+  - 图文片段命名为 `clip_XX_*.jpg`
+  - 普通视频命名为 `video_<name>_*.jpg`
 - 水印取决于源站返回：若无可用无水印地址，会回退到可用地址（可能带水印）
 - 建议保持完整 Cookie（尤其 `msToken`）并用同一路径重跑补齐
 
@@ -396,6 +408,7 @@ python cookie_extractor.py
 - ✅ **抓取完整性增强**：补充置顶项合并与多级兜底（IES / HTML / Playwright）
 - ✅ **下载稳定性增强**：支持多 URL 回退、重定向处理、403/429 退避
 - ✅ **图文资源策略优化**：图文中含视频片段时优先下载 `clip_<index>.mp4`，失败自动回退图片
+- ✅ **视频切帧能力**：普通视频与图文片段下载后自动按 `slice_fps` 抽帧，统一输出到作品子目录
 - ✅ **路径兼容性增强**：Windows 文件名与长路径处理优化
 - ℹ️ **水印说明**：当平台仅返回带水印资源时会自动兜底下载，尽量保证可用性
 

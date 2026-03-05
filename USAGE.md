@@ -40,21 +40,37 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx"
 ### 4. 用简易 UI 运行（省事）
 
 ```bash
-python downloader_ui.py
+python ui.py
 ```
 
 - 支持一键运行 `downloader.py`，不需要手敲整条命令
 - 自动记录 URL、配置路径、输出路径
 - 自动提取并保存 `user_id`，后续可直接选择复用
-- `Username` 为手动维护：在 `Manual Username` 输入昵称后，点 `Set Name` 写入选中记录
+- `Username` 为手动维护：选中记录后点 `Set Name` 弹窗填写
 - `Refresh` 仅刷新本地记录，不再自动请求昵称，避免接口重试刷屏
 - `Saved Records` 支持横向滚动，长 URL 可左右拖动查看
+- 可勾选“Backfill slices for old video folders”，下载前自动补切旧视频目录
 
 ### 图文/片段作品输出规则（V2.1）
 
 - `clip_<index>.mp4`：图文作品中的视频片段下载成功时输出
 - `image_<index>.jpg`：纯图片，或片段 URL 全部失败后的回退结果
+- `frames/*.jpg`：对下载到的视频切帧后的图片（默认每秒 10 张）
 - 下载器会优先尝试非水印地址；如果源站未提供无水印地址，回退结果可能带水印
+- 同一条作品下多个片段的切帧结果会保存在同一个 `frames/` 子目录
+
+#### 切帧配置（config_simple.yml）
+
+```yaml
+slice_videos: true      # 开启视频切帧（普通视频 + 图文片段）
+slice_fps: 10          # 每秒截图次数
+slice_subdir: frames   # 切帧输出子目录名
+slice_backfill_on_run: false  # 启动时补切旧目录（有视频且无切片目录）
+auto_install_ffmpeg: true  # ffmpeg 缺失时自动安装 imageio-ffmpeg
+# ffmpeg_bin: ffmpeg   # 可选：自定义 ffmpeg 路径
+```
+
+> 默认会自动安装 `imageio-ffmpeg` 提供 ffmpeg；若安装失败，则跳过切帧但不影响视频下载。
 
 ## 📋 版本对比
 
@@ -66,6 +82,7 @@ python downloader_ui.py
 | Cookie 兜底 | ❌ | ✅ 自动合并 config/cookies.txt/cookies.pkl |
 | 图文 403 处理 | 一般 | ✅ 多 URL 自动回退 |
 | 图文片段视频 | ❌ | ✅ 优先下载 `clip_<index>.mp4`，失败回退 `image_<index>.jpg` |
+| 视频切帧 | ❌ | ✅ 普通视频 + 图文片段按 `slice_fps` 自动抽帧到 `frames/` |
 | 水印控制策略 | 一般 | ✅ 优先非水印地址，必要时回退可用地址 |
 | 使用复杂度 | 简单 | 中等 |
 | 稳定性 | 高 | 中等 |

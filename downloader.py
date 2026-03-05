@@ -12,6 +12,8 @@ import logging
 import os
 import pickle
 import re
+import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -19,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 from urllib.parse import urlparse, quote
 import argparse
+import importlib
 import yaml
 
 # 缁楊兛绗侀弬鐟扮氨
@@ -164,6 +167,26 @@ class UnifiedDownloader:
         # 娣囨繂鐡ㄧ捄顖氱窞
         self.save_path = Path(self.config.get('path', './Downloaded'))
         self.save_path.mkdir(parents=True, exist_ok=True)
+        
+        # 视频切帧配置（兼容旧键 slice_clips）
+        slice_videos_cfg = self.config.get('slice_videos')
+        if slice_videos_cfg is None:
+            slice_videos_cfg = self.config.get('slice_clips', True)
+        self.slice_videos = bool(slice_videos_cfg)
+        self.slice_fps = int(self.config.get('slice_fps', 10) or 10)
+        if self.slice_fps <= 0:
+            self.slice_fps = 10
+        self.slice_subdir = self._safe_name(
+            self.config.get('slice_subdir', 'frames'),
+            default='frames',
+            max_len=40,
+        )
+        self.slice_backfill_on_run = bool(self.config.get('slice_backfill_on_run', False))
+        self.ffmpeg_bin = str(self.config.get('ffmpeg_bin', 'ffmpeg') or 'ffmpeg')
+        self.auto_install_ffmpeg = bool(self.config.get('auto_install_ffmpeg', True))
+        self._ffmpeg_checked = False
+        self._ffmpeg_path: Optional[str] = None
+        self._imageio_ffmpeg_checked = False
         
     def _load_config(self, config_path: str) -> Dict:
         """閸旂姾娴囬柊宥囩枂閺傚洣娆?"""
@@ -665,12 +688,14 @@ class UnifiedDownloader:
 
             if is_image:
                 images = video_info.get('images', [])
+                downloaded_videos: List[Path] = []
                 for i, image_info in enumerate(images):
                     clip_urls = self._get_image_clip_url_candidates(image_info)
                     if clip_urls:
                         clip_path = save_dir / f"clip_{i+1}.mp4"
                         if await self._download_first_success(clip_urls, clip_path, required=False):
                             logger.info(f"Downloaded clip {i+1}/{len(images)}: {clip_path.name}")
+                            downloaded_videos.append(clip_path)
                             continue
                         logger.warning(f"Clip {i+1}/{len(images)} failed, fallback to image")
 
@@ -681,11 +706,17 @@ class UnifiedDownloader:
                     else:
                         logger.error(f"Failed to download image {i+1}/{len(images)}")
                         success = False
+
+                if downloaded_videos and self.slice_videos:
+                    # Frame extraction is CPU-heavy; move to thread to avoid blocking event loop.
+                    await asyncio.to_thread(self._slice_videos_for_post, save_dir, downloaded_videos)
             else:
                 video_urls = self._get_video_url_candidates(video_info)
                 file_path = save_dir / f"{folder_name}.mp4"
                 if video_urls and await self._download_first_success(video_urls, file_path, required=True):
                     logger.info(f"Downloaded video: {file_path.name}")
+                    if self.slice_videos:
+                        await asyncio.to_thread(self._slice_videos_for_post, save_dir, [file_path])
                 else:
                     logger.error("Failed to download video after trying all candidate URLs")
                     success = False
@@ -734,6 +765,215 @@ class UnifiedDownloader:
                 return True
             logger.warning(f"Candidate URL {idx} failed for {save_path.name}")
         return False
+
+    def _resolve_ffmpeg_path(self) -> Optional[str]:
+        """Resolve ffmpeg executable once."""
+        if self._ffmpeg_checked:
+            return self._ffmpeg_path
+
+        self._ffmpeg_checked = True
+        candidate = (self.ffmpeg_bin or 'ffmpeg').strip()
+        if not candidate:
+            candidate = 'ffmpeg'
+
+        if os.path.isabs(candidate) and os.path.exists(candidate):
+            self._ffmpeg_path = candidate
+            return self._ffmpeg_path
+
+        resolved = shutil.which(candidate)
+        if resolved:
+            self._ffmpeg_path = resolved
+            return self._ffmpeg_path
+
+        imageio_ffmpeg_path = self._resolve_ffmpeg_via_imageio()
+        if imageio_ffmpeg_path:
+            self._ffmpeg_path = imageio_ffmpeg_path
+            return self._ffmpeg_path
+
+        logger.warning(
+            "Clip slicing is enabled but ffmpeg is not found. "
+            "Set ffmpeg_bin in config or add ffmpeg to PATH."
+        )
+        self._ffmpeg_path = None
+        return None
+
+    def _resolve_ffmpeg_via_imageio(self) -> Optional[str]:
+        """
+        Resolve ffmpeg from imageio-ffmpeg package.
+        If package is missing and auto_install_ffmpeg is enabled, install it automatically.
+        """
+        if self._imageio_ffmpeg_checked:
+            return None
+        self._imageio_ffmpeg_checked = True
+
+        def _get_imageio_ffmpeg_exe() -> Optional[str]:
+            try:
+                module = importlib.import_module("imageio_ffmpeg")
+                exe = module.get_ffmpeg_exe()
+                if exe and os.path.exists(exe):
+                    return exe
+            except Exception:
+                return None
+            return None
+
+        exe_path = _get_imageio_ffmpeg_exe()
+        if exe_path:
+            logger.info(f"Using ffmpeg from imageio-ffmpeg: {exe_path}")
+            return exe_path
+
+        if not self.auto_install_ffmpeg:
+            return None
+
+        logger.info(
+            "ffmpeg not found in PATH, installing imageio-ffmpeg into current Python environment..."
+        )
+        install_cmd = [sys.executable, "-m", "pip", "install", "imageio-ffmpeg"]
+        try:
+            proc = subprocess.run(
+                install_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except Exception as exc:
+            logger.warning(f"Auto install imageio-ffmpeg failed to start: {exc}")
+            return None
+
+        if proc.returncode != 0:
+            err = (proc.stderr or "").strip()
+            logger.warning(
+                f"Auto install imageio-ffmpeg failed (exit={proc.returncode}): "
+                f"{err[:300] if err else 'unknown error'}"
+            )
+            return None
+
+        exe_path = _get_imageio_ffmpeg_exe()
+        if exe_path:
+            logger.info(f"Using auto-installed ffmpeg: {exe_path}")
+            return exe_path
+
+        logger.warning("imageio-ffmpeg installed but ffmpeg executable path was not resolved.")
+        return None
+
+    def _frame_prefix_for_video(self, video_path: Path, fallback_index: int = 1) -> str:
+        """Build stable frame filename prefix for a video file."""
+        stem = video_path.stem
+        match = re.match(r'^clip_(\d+)$', stem, flags=re.I)
+        if match:
+            return f"clip_{int(match.group(1)):02d}_"
+
+        safe_stem = re.sub(r'[^0-9A-Za-z_-]+', '_', stem).strip('_')
+        if not safe_stem:
+            safe_stem = f"{fallback_index:02d}"
+        if len(safe_stem) > 40:
+            safe_stem = safe_stem[:40]
+        return f"video_{safe_stem}_"
+
+    def _slice_single_video_to_jpg(self, video_path: Path, frame_dir: Path, frame_prefix: str) -> int:
+        """
+        Slice one video into jpg frames.
+        Returns the number of extracted frames.
+        """
+        ffmpeg = self._resolve_ffmpeg_path()
+        if not ffmpeg:
+            return 0
+
+        if not video_path.exists():
+            return 0
+
+        existing = list(frame_dir.glob(f"{frame_prefix}*.jpg"))
+        if existing:
+            logger.info(f"Skip slicing existing frames: {video_path.name}")
+            return len(existing)
+
+        output_pattern = frame_dir / f"{frame_prefix}%06d.jpg"
+        cmd = [
+            ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-y",
+            "-i",
+            str(video_path),
+            "-vf",
+            f"fps={self.slice_fps}",
+            str(output_pattern),
+        ]
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if proc.returncode != 0:
+            stderr_text = (proc.stderr or "").strip()
+            logger.warning(
+                f"Video slicing failed for {video_path.name}: "
+                f"{stderr_text or f'ffmpeg exit code {proc.returncode}'}"
+            )
+            return 0
+
+        produced = len(list(frame_dir.glob(f"{frame_prefix}*.jpg")))
+        if produced > 0:
+            logger.info(
+                f"Sliced {video_path.name} at {self.slice_fps} fps -> {produced} frame(s)"
+            )
+        return produced
+
+    def _slice_videos_for_post(self, save_dir: Path, video_files: List[Path]) -> int:
+        """Slice all downloaded videos for one post into one shared subfolder."""
+        if not video_files or not self.slice_videos:
+            return 0
+
+        frame_dir = save_dir / self.slice_subdir
+        frame_dir.mkdir(parents=True, exist_ok=True)
+
+        total_frames = 0
+        for idx, video_path in enumerate(video_files, start=1):
+            frame_prefix = self._frame_prefix_for_video(video_path, idx)
+            total_frames += self._slice_single_video_to_jpg(video_path, frame_dir, frame_prefix)
+
+        if total_frames > 0:
+            logger.info(
+                f"Video slicing completed, total {total_frames} frame(s) in: {frame_dir}"
+            )
+        return total_frames
+
+    def _slice_backfill_existing_videos(self) -> int:
+        """
+        Backfill slicing for existing post folders:
+        if a folder contains mp4 files but no slice subfolder, generate frames.
+        """
+        if not self.slice_videos or not self.slice_backfill_on_run:
+            return 0
+
+        if not self.save_path.exists():
+            return 0
+
+        folder_to_videos: Dict[Path, List[Path]] = {}
+        for mp4_file in self.save_path.rglob("*.mp4"):
+            if not mp4_file.is_file():
+                continue
+            folder_to_videos.setdefault(mp4_file.parent, []).append(mp4_file)
+
+        processed_folders = 0
+        total_frames = 0
+        for folder, videos in folder_to_videos.items():
+            frame_dir = folder / self.slice_subdir
+            if frame_dir.exists():
+                # User requested: only process folders that do not have slice folder yet.
+                continue
+
+            videos_sorted = sorted(videos, key=lambda p: p.name.lower())
+            total_frames += self._slice_videos_for_post(folder, videos_sorted)
+            processed_folders += 1
+
+        if processed_folders > 0:
+            logger.info(
+                f"Backfill slicing checked {processed_folders} folder(s), "
+                f"generated {total_frames} frame(s)"
+            )
+        return total_frames
 
     def _extract_addr_url_candidates(self, addr: Any) -> List[str]:
         """Extract URL candidates from an address object."""
@@ -1604,6 +1844,10 @@ class UnifiedDownloader:
 
         await self._initialize_cookies_and_headers()
 
+        if self.slice_backfill_on_run:
+            console.print("[cyan]Checking previous downloaded videos for missing slices...[/cyan]")
+            await asyncio.to_thread(self._slice_backfill_existing_videos)
+
         urls = self.config.get('link', [])
         if isinstance(urls, str):
             urls = [urls]
@@ -1701,6 +1945,19 @@ def main():
         '--cookie',
         help='Manual cookie string, e.g. "msToken=xxx; ttwid=yyy"'
     )
+    parser.add_argument(
+        '--slice-backfill',
+        dest='slice_backfill_on_run',
+        action='store_true',
+        help='Before downloading, backfill slicing for old folders that have videos but no slice folder'
+    )
+    parser.add_argument(
+        '--no-slice-backfill',
+        dest='slice_backfill_on_run',
+        action='store_false',
+        help='Disable pre-download backfill slicing check'
+    )
+    parser.set_defaults(slice_backfill_on_run=None)
     
     args = parser.parse_args()
     
@@ -1720,6 +1977,8 @@ def main():
     if args.cookie:
         temp_config['cookies'] = args.cookie
         temp_config['auto_cookie'] = False
+    if args.slice_backfill_on_run is not None:
+        temp_config['slice_backfill_on_run'] = args.slice_backfill_on_run
     
     # 婵″倹鐏夌€涙ê婀稉瀛樻闁板秶鐤嗛敍灞藉灟閻㈢喐鍨氭稉鈧稉顏冨閺冭埖鏋冩禒鏈电返閻滅増婀侀弸鍕偓鐘插毐閺侀濞囬悽?
     if temp_config:

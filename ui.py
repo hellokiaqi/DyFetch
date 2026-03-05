@@ -13,7 +13,7 @@ from typing import Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
 
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 HISTORY_FILE = "ui_history.json"
 
@@ -60,7 +60,7 @@ class DownloaderUI:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title("Douyin Downloader UI")
-        self.root.geometry("1600x900")
+        self.root.geometry("1460x860")
 
         self.base_dir = Path(__file__).resolve().parent
         self.history_path = self.base_dir / HISTORY_FILE
@@ -72,21 +72,33 @@ class DownloaderUI:
         self.url_var = tk.StringVar()
         self.config_var = tk.StringVar(value="config_simple.yml")
         self.path_var = tk.StringVar(value="./my_videos_fix/")
-        self.manual_name_var = tk.StringVar()
+        self.slice_backfill_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Idle")
 
         self._build_layout()
         self.refresh_history()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.after(100, self.poll_output)
-        self.root.after(160, self._set_initial_pane)
+        self.root.after(200, lambda: self._set_initial_pane(0))
 
-    def _set_initial_pane(self) -> None:
+    def _set_initial_pane(self, attempt: int = 0) -> None:
         try:
-            width = self.middle_frame.winfo_width() or self.root.winfo_width()
-            self.middle_frame.sashpos(0, max(560, int(width * 0.42)))
+            self.root.update_idletasks()
+            width = self.middle_frame.winfo_width()
+            if width < 600:
+                if attempt < 20:
+                    self.root.after(120, lambda: self._set_initial_pane(attempt + 1))
+                return
+
+            target = max(500, int(width * 0.36))
+            self.middle_frame.sashpos(0, target)
+
+            # On some Windows/Tk setups, first call may be ignored while layout settles.
+            if self.middle_frame.sashpos(0) <= 1 and attempt < 20:
+                self.root.after(120, lambda: self._set_initial_pane(attempt + 1))
         except Exception:
-            pass
+            if attempt < 20:
+                self.root.after(120, lambda: self._set_initial_pane(attempt + 1))
 
     def _build_layout(self) -> None:
         root_frame = ttk.Frame(self.root, padding=10)
@@ -117,10 +129,11 @@ class DownloaderUI:
             row=1, column=7, pady=(8, 0)
         )
 
-        ttk.Label(input_frame, text="Manual Username").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(input_frame, textvariable=self.manual_name_var, width=45).grid(
-            row=2, column=1, columnspan=3, sticky="ew", padx=(8, 12), pady=(8, 0)
-        )
+        ttk.Checkbutton(
+            input_frame,
+            text="Backfill slices for old video folders (if no slice folder)",
+            variable=self.slice_backfill_var,
+        ).grid(row=2, column=0, columnspan=8, sticky="w", pady=(8, 0))
 
         ttk.Label(input_frame, textvariable=self.status_var).grid(
             row=3, column=0, columnspan=8, sticky="w", pady=(8, 0)
@@ -251,7 +264,6 @@ class DownloaderUI:
         self.url_var.set(record.get("url", ""))
         self.config_var.set(record.get("config", "config_simple.yml"))
         self.path_var.set(record.get("output_path", "./my_videos_fix/"))
-        self.manual_name_var.set(record.get("user_name", ""))
 
     def save_current_record(self) -> None:
         url = self.url_var.get().strip()
@@ -262,7 +274,7 @@ class DownloaderUI:
             url,
             self.config_var.get().strip(),
             self.path_var.get().strip(),
-            self.manual_name_var.get().strip(),
+            "",
         )
         self.refresh_history()
         self.status_var.set("Record saved.")
@@ -280,7 +292,16 @@ class DownloaderUI:
         record = self.get_selected_record()
         if not record:
             return
-        manual_name = self.manual_name_var.get().strip()
+        current_name = str(record.get("user_name", "")).strip()
+        manual_name = simpledialog.askstring(
+            "Set Username",
+            "Input username:",
+            initialvalue=current_name,
+            parent=self.root,
+        )
+        if manual_name is None:
+            return
+        manual_name = manual_name.strip()
         if not manual_name:
             messagebox.showwarning("Missing Username", "Please input a username first.")
             return
@@ -357,6 +378,10 @@ class DownloaderUI:
             "--path",
             output_path,
         ]
+        if self.slice_backfill_var.get():
+            cmd.append("--slice-backfill")
+        else:
+            cmd.append("--no-slice-backfill")
 
         self.append_log("\n" + "=" * 72 + "\n")
         self.append_log("Running: " + " ".join(cmd) + "\n")
@@ -378,7 +403,7 @@ class DownloaderUI:
             return
 
         self.status_var.set("Running...")
-        self.upsert_record(url, config_path, output_path, self.manual_name_var.get().strip())
+        self.upsert_record(url, config_path, output_path, "")
         self.refresh_history()
 
         threading.Thread(target=self._read_process_output, daemon=True).start()

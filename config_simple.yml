@@ -18,6 +18,12 @@ music: true      # 下载音乐
 cover: true      # 下载封面
 avatar: false    # 下载头像
 json: true       # 保存元数据
+slice_videos: true  # 视频切帧（普通视频 + 图文片段）
+slice_fps: 10      # 每秒截图次数
+slice_subdir: frames  # 切帧输出子目录（同一条作品下多个片段保存在一起）
+slice_backfill_on_run: false  # 运行时补切旧目录（有视频且无切片目录）
+auto_install_ffmpeg: true  # ffmpeg 缺失时自动安装 imageio-ffmpeg
+# ffmpeg_bin: ffmpeg  # 可选：自定义 ffmpeg 可执行文件路径
 
 # 时间过滤（可选，格式：YYYY-MM-DD）
 start_time: ""   # 开始时间

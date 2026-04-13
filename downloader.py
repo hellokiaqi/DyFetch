@@ -7,22 +7,30 @@
 """
 
 import asyncio
+import contextlib
 import json
 import logging
+import io
 import os
 import pickle
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 from urllib.parse import urlparse, quote
 import argparse
 import importlib
 import yaml
+
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
 # 缁楊兛绗侀弬鐟扮氨
 try:
@@ -143,6 +151,7 @@ class UnifiedDownloader:
     """缂佺喍绔存稉瀣祰閸?"""
     
     def __init__(self, config_path: str = "config.yml"):
+        self.config_path = config_path
         self.config = self._load_config(config_path)
         self.urls_helper = Urls()
         self.result_helper = Result()
@@ -184,6 +193,7 @@ class UnifiedDownloader:
         self.slice_backfill_on_run = bool(self.config.get('slice_backfill_on_run', False))
         self.ffmpeg_bin = str(self.config.get('ffmpeg_bin', 'ffmpeg') or 'ffmpeg')
         self.auto_install_ffmpeg = bool(self.config.get('auto_install_ffmpeg', True))
+        self.auto_install_playwright = bool(self.config.get('auto_install_playwright', True))
         self._ffmpeg_checked = False
         self._ffmpeg_path: Optional[str] = None
         self._imageio_ffmpeg_checked = False
@@ -286,6 +296,618 @@ class UnifiedDownloader:
         cookie_map = self._cookies_to_dict(self.cookies)
         return '; '.join([f'{k}={v}' for k, v in cookie_map.items() if k and v is not None])
 
+    def _load_cookie_records_from_pickle(self, file_path: str = 'cookies.pkl') -> List[Dict[str, Any]]:
+        """Load browser cookie records with domain/path metadata for Playwright reuse."""
+        if not os.path.exists(file_path):
+            return []
+        try:
+            with open(file_path, 'rb') as f:
+                data = pickle.load(f)
+            records = data.get('cookies') if isinstance(data, dict) else data
+            if not isinstance(records, list):
+                return []
+            normalized: List[Dict[str, Any]] = []
+            for item in records:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get('name', '')).strip()
+                value = item.get('value')
+                domain = str(item.get('domain', '')).strip()
+                path = str(item.get('path', '/') or '/')
+                if not name or value is None or not domain:
+                    continue
+                cookie_record: Dict[str, Any] = {
+                    'name': name,
+                    'value': str(value),
+                    'domain': domain,
+                    'path': path,
+                }
+                expires = item.get('expires')
+                if isinstance(expires, (int, float)) and expires > 0:
+                    cookie_record['expires'] = expires
+                if 'httpOnly' in item:
+                    cookie_record['httpOnly'] = bool(item.get('httpOnly'))
+                if 'secure' in item:
+                    cookie_record['secure'] = bool(item.get('secure'))
+                same_site = item.get('sameSite')
+                if same_site in ('Strict', 'Lax', 'None'):
+                    cookie_record['sameSite'] = same_site
+                normalized.append(cookie_record)
+            return normalized
+        except Exception as e:
+            logger.warning(f"Failed to load browser cookie records from {file_path}: {e}")
+            return []
+
+    def _build_playwright_cookie_records(self) -> List[Dict[str, Any]]:
+        """Build Playwright cookie records from available cookie sources."""
+        records = self._load_cookie_records_from_pickle('cookies.pkl')
+        if records:
+            return records
+
+        cookie_map = self._cookies_to_dict(self.cookies)
+        generated: List[Dict[str, Any]] = []
+        for name, value in cookie_map.items():
+            if not name or value is None:
+                continue
+            generated.append({
+                'name': str(name),
+                'value': str(value),
+                'domain': '.douyin.com',
+                'path': '/',
+            })
+        return generated
+
+    def _get_playwright_storage_state_path(self) -> str:
+        """Return storage state path used by browser-assisted recovery."""
+        return str(self.config.get('playwright_storage_state', 'storage_state.json') or 'storage_state.json')
+
+    def _python_has_module(self, python_executable: str, module_name: str) -> bool:
+        """Check whether a Python executable can import a module."""
+        if not python_executable or not os.path.exists(python_executable):
+            return False
+        try:
+            result = subprocess.run(
+                [
+                    python_executable,
+                    '-c',
+                    (
+                        'import importlib.util, sys; '
+                        f'sys.exit(0 if importlib.util.find_spec({module_name!r}) else 1)'
+                    ),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _iter_candidate_playwright_pythons(self) -> List[str]:
+        """Return likely Python executables that may already have Playwright."""
+        candidates: List[str] = []
+
+        def add_candidate(path_like: Any):
+            if not path_like:
+                return
+            try:
+                candidate = str(Path(path_like))
+            except Exception:
+                return
+            if candidate not in candidates and os.path.exists(candidate):
+                candidates.append(candidate)
+
+        add_candidate(self.config.get('playwright_python'))
+        add_candidate(sys.executable)
+
+        conda_prefix = os.environ.get('CONDA_PREFIX')
+        if conda_prefix:
+            add_candidate(Path(conda_prefix) / 'python.exe')
+
+        executable_path = Path(sys.executable)
+        root_candidates = {
+            executable_path.parent.parent,
+            Path.home() / 'anaconda3',
+            Path.home() / 'miniconda3',
+            Path('D:/anaconda3'),
+            Path('C:/Users') / os.environ.get('USERNAME', '') / 'anaconda3',
+            Path('C:/Users') / os.environ.get('USERNAME', '') / 'miniconda3',
+        }
+        for root in root_candidates:
+            try:
+                envs_dir = Path(root) / 'envs'
+            except Exception:
+                continue
+            if not envs_dir.exists():
+                continue
+            for python_path in envs_dir.glob('*/python.exe'):
+                add_candidate(python_path)
+
+        return candidates
+
+    def _install_playwright_for_python(self, python_executable: str) -> bool:
+        """Install Playwright into the given Python environment if allowed."""
+        if not self.auto_install_playwright or not python_executable:
+            return False
+
+        try:
+            logger.info("Installing Playwright into interpreter: %s", python_executable)
+            install_result = subprocess.run(
+                [python_executable, '-m', 'pip', 'install', 'playwright'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if install_result.returncode != 0:
+                logger.warning(
+                    "Playwright install failed for %s: %s",
+                    python_executable,
+                    (install_result.stderr or install_result.stdout or '').strip()[:400],
+                )
+                return False
+
+            browser_result = subprocess.run(
+                [python_executable, '-m', 'playwright', 'install', 'chromium'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=900,
+            )
+            if browser_result.returncode != 0:
+                logger.warning(
+                    "Playwright browser install failed for %s: %s",
+                    python_executable,
+                    (browser_result.stderr or browser_result.stdout or '').strip()[:400],
+                )
+            return self._python_has_module(python_executable, 'playwright')
+        except Exception as e:
+            logger.warning("Auto-install Playwright failed for %s: %s", python_executable, e)
+            return False
+
+    def _find_playwright_python(self) -> Optional[str]:
+        """Find a Python interpreter that can run Playwright helper recovery."""
+        for candidate in self._iter_candidate_playwright_pythons():
+            if self._python_has_module(candidate, 'playwright'):
+                return candidate
+
+        if self._install_playwright_for_python(sys.executable):
+            return sys.executable
+
+        return None
+
+    async def _fetch_user_profile(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch user profile summary for counts and nickname."""
+        platform_variants = [
+            ("Win32", "Chrome", "145.0.0.0"),
+            ("MacIntel", "Chrome", "122.0.0.0"),
+        ]
+        cookie_map = self._cookies_to_dict(self.cookies)
+        ms_token = cookie_map.get('msToken', '') or ''
+
+        for browser_platform, browser_name, browser_version in platform_variants:
+            try:
+                params_list = [
+                    f'sec_user_id={user_id}',
+                    'device_platform=webapp',
+                    'aid=6383',
+                    'channel=channel_pc_web',
+                    'publish_video_strategy_type=2',
+                    'source=channel_pc_web',
+                    'personal_center_strategy=1',
+                    'profile_other_record_enable=1',
+                    'land_to=1',
+                    'update_version_code=170400',
+                    'pc_client_type=1',
+                    'pc_libra_divert=Windows',
+                    'support_h265=1',
+                    'support_dash=1',
+                    'cpu_core_num=8',
+                    'version_code=170400',
+                    'version_name=17.4.0',
+                    'cookie_enabled=true',
+                    'screen_width=1440',
+                    'screen_height=1200',
+                    'browser_language=zh-CN',
+                    f'browser_platform={browser_platform}',
+                    f'browser_name={browser_name}',
+                    f'browser_version={browser_version}',
+                    'browser_online=true',
+                    'engine_name=Blink',
+                    f'engine_version={browser_version}',
+                    'os_name=Windows',
+                    'os_version=10',
+                    'device_memory=8',
+                    'platform=PC',
+                    'downlink=10',
+                    'effective_type=4g',
+                    'round_trip_time=0',
+                ]
+                if ms_token:
+                    params_list.append(f'msToken={quote(ms_token, safe="")}')
+
+                params = '&'.join(params_list)
+                try:
+                    full_url = f"{self.urls_helper.USER_DETAIL}{self.utils.getXbogus(params)}"
+                except Exception as e:
+                    logger.warning(f"X-Bogus build failed for user detail: {e}; fallback to unsigned request")
+                    full_url = f"{self.urls_helper.USER_DETAIL}{params}"
+
+                req_headers = dict(self.headers)
+                if cookie_map:
+                    req_headers.pop('Cookie', None)
+                async with aiohttp.ClientSession(cookies=cookie_map or None) as session:
+                    async with session.get(full_url, headers=req_headers, timeout=10) as response:
+                        body = await response.read()
+                        if response.status != 200 or not body:
+                            continue
+                        data = json.loads(body.decode('utf-8', errors='ignore'))
+                        if data.get('status_code') != 0:
+                            continue
+                        user = data.get('user')
+                        if isinstance(user, dict):
+                            return user
+            except Exception as e:
+                logger.warning(f"Fetch user profile failed (platform={browser_platform}): {e}")
+
+        return None
+
+    async def _browser_profile_requires_login(self, page) -> bool:
+        """Check whether the user profile page is still showing the login wall."""
+        try:
+            body_text = await page.evaluate("() => document.body.innerText || ''")
+        except Exception:
+            return False
+        return '登录后查看更多作品' in body_text or '立即登录' in body_text
+
+    async def _capture_browser_profile_links(self, page) -> Dict[str, str]:
+        """Collect visible profile work links from the browser DOM."""
+        try:
+            hrefs = await page.evaluate("""
+                () => Array.from(
+                    document.querySelectorAll('a[href*="/video/"], a[href*="/note/"]')
+                ).map((node) => node.href).filter(Boolean)
+            """)
+        except Exception:
+            return {}
+
+        links: Dict[str, str] = {}
+        for href in hrefs or []:
+            aweme_id = self.extract_id_from_url(href)
+            if aweme_id:
+                links[aweme_id] = href
+        return links
+
+    async def _recover_user_posts_via_local_playwright(
+        self,
+        user_id: str,
+        expected_count: int = 0,
+        existing_ids: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Recover user posts in-process with Playwright."""
+        from playwright.async_api import async_playwright
+
+        existing_ids = set(existing_ids or set())
+        storage_state_path = self._get_playwright_storage_state_path()
+        headless = bool(self.config.get('user_posts_browser_headless', False))
+        login_timeout = int(self.config.get('user_posts_browser_login_timeout', 300) or 300)
+        max_scroll_rounds = int(self.config.get('user_posts_browser_max_scroll_rounds', 120) or 120)
+        collected_awemes: Dict[str, Dict[str, Any]] = {}
+        collected_links: Dict[str, str] = {}
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=headless,
+                args=['--disable-blink-features=AutomationControlled']
+            )
+            context_kwargs: Dict[str, Any] = {
+                'viewport': {'width': 1440, 'height': 1200},
+                'locale': 'zh-CN',
+                'timezone_id': 'Asia/Shanghai',
+                'user_agent': self.headers.get(
+                    'User-Agent',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                    '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                ),
+            }
+            if os.path.exists(storage_state_path):
+                context_kwargs['storage_state'] = storage_state_path
+
+            context = await browser.new_context(**context_kwargs)
+            if 'storage_state' not in context_kwargs:
+                cookie_records = self._build_playwright_cookie_records()
+                if cookie_records:
+                    await context.add_cookies(cookie_records)
+
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+            page = await context.new_page()
+
+            async def on_response(response):
+                if '/aweme/v1/web/aweme/post/' not in response.url:
+                    return
+                try:
+                    data = await response.json()
+                except Exception:
+                    return
+                aweme_list = data.get('aweme_list') or []
+                if not isinstance(aweme_list, list):
+                    return
+                for aweme in aweme_list:
+                    aweme_id = self._get_aweme_id_from_info(aweme)
+                    if aweme_id:
+                        collected_awemes[aweme_id] = aweme
+
+            page.on('response', on_response)
+
+            try:
+                await page.goto(
+                    f'https://www.douyin.com/user/{user_id}?from_tab_name=main',
+                    wait_until='domcontentloaded',
+                    timeout=60000,
+                )
+                await page.wait_for_timeout(5000)
+
+                if await self._browser_profile_requires_login(page):
+                    if headless:
+                        logger.warning(
+                            "Browser recovery still hits the login wall in headless mode; "
+                            "set user_posts_browser_headless: false and login once in the opened browser"
+                        )
+                        return {'awemes': [], 'links': {}}
+
+                    console.print(
+                        "[yellow]The profile still hides old posts in browser mode. "
+                        "Please complete Douyin login in the opened browser window...[/yellow]"
+                    )
+                    deadline = time.time() + login_timeout
+                    while time.time() < deadline:
+                        if not await self._browser_profile_requires_login(page):
+                            break
+                        await page.wait_for_timeout(2000)
+
+                    if await self._browser_profile_requires_login(page):
+                        logger.warning("Browser recovery timed out waiting for profile login access")
+                        return {'awemes': [], 'links': {}}
+
+                    try:
+                        await context.storage_state(path=storage_state_path)
+                        logger.info("Saved browser storage state to %s", storage_state_path)
+                    except Exception as e:
+                        logger.warning("Failed to save browser storage state: %s", e)
+
+                stagnant_rounds = 0
+                last_seen = -1
+                for _ in range(max_scroll_rounds):
+                    visible_links = await self._capture_browser_profile_links(page)
+                    collected_links.update(visible_links)
+
+                    current_seen = len(set(collected_awemes.keys()) | set(collected_links.keys()))
+                    if expected_count and current_seen >= expected_count:
+                        break
+
+                    clicked_more = False
+                    try:
+                        clicked_more = await page.evaluate("""
+                            () => {
+                                const labels = ['看更多', '查看更多', '展开更多'];
+                                const nodes = Array.from(document.querySelectorAll('button, div, span'));
+                                const target = nodes.find((node) => labels.includes((node.textContent || '').trim()));
+                                if (!target) return false;
+                                target.click();
+                                return true;
+                            }
+                        """)
+                    except Exception:
+                        clicked_more = False
+
+                    if not clicked_more:
+                        try:
+                            await page.evaluate("""
+                                () => {
+                                    const container =
+                                        document.querySelector('.parent-route-container.route-scroll-container') ||
+                                        document.querySelector('.route-scroll-container') ||
+                                        document.scrollingElement ||
+                                        document.documentElement;
+                                    container.scrollBy(0, Math.max(1800, (container.clientHeight || 0) - 120));
+                                    window.scrollTo(0, document.body.scrollHeight);
+                                }
+                            """)
+                        except Exception:
+                            pass
+                        try:
+                            await page.mouse.wheel(0, 3200)
+                        except Exception:
+                            pass
+
+                    await page.wait_for_timeout(1800)
+
+                    if current_seen <= last_seen:
+                        stagnant_rounds += 1
+                    else:
+                        stagnant_rounds = 0
+                        last_seen = current_seen
+
+                    if stagnant_rounds >= 20:
+                        break
+
+                visible_links = await self._capture_browser_profile_links(page)
+                collected_links.update(visible_links)
+
+                unique_seen = len(set(collected_awemes.keys()) | set(collected_links.keys()))
+                logger.info(
+                    "Browser recovery collected %s post payloads and %s visible links",
+                    len(collected_awemes),
+                    len(collected_links),
+                )
+                if expected_count and unique_seen < expected_count:
+                    logger.warning(
+                        "Browser recovery is still short of the profile count: got %s unique ids, expected %s",
+                        unique_seen,
+                        expected_count,
+                    )
+
+                return {
+                    'awemes': [
+                        aweme for aweme_id, aweme in collected_awemes.items()
+                        if aweme_id not in existing_ids
+                    ],
+                    'links': {
+                        aweme_id: href
+                        for aweme_id, href in collected_links.items()
+                        if aweme_id not in existing_ids and aweme_id not in collected_awemes
+                    },
+                }
+            finally:
+                await context.close()
+                await browser.close()
+
+    async def _run_browser_recovery_subprocess(
+        self,
+        user_id: str,
+        expected_count: int = 0,
+        existing_ids: Optional[Set[str]] = None,
+    ) -> Dict[str, Any]:
+        """Run browser recovery through another Python interpreter that has Playwright."""
+        helper_python = self._find_playwright_python()
+        if not helper_python:
+            logger.warning(
+                "Playwright is unavailable for browser-assisted recovery; current interpreter: %s",
+                sys.executable,
+            )
+            return {'awemes': [], 'links': {}}
+
+        request_payload = {
+            'config_path': str(Path(self.config_path).resolve()),
+            'user_id': user_id,
+            'expected_count': expected_count,
+            'existing_ids': sorted(existing_ids or []),
+        }
+        login_timeout = int(self.config.get('user_posts_browser_login_timeout', 300) or 300)
+        max_scroll_rounds = int(self.config.get('user_posts_browser_max_scroll_rounds', 120) or 120)
+        timeout_seconds = max(180, login_timeout + max_scroll_rounds * 5 + 120)
+
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
+            json.dump(request_payload, tmp_file, ensure_ascii=False)
+            tmp_input_path = tmp_file.name
+
+        try:
+            result = subprocess.run(
+                [
+                    helper_python,
+                    __file__,
+                    '--browser-recover-user-posts-helper',
+                    tmp_input_path,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=timeout_seconds,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+            )
+        except Exception as e:
+            logger.warning("External browser recovery helper failed to start: %s", e)
+            return {'awemes': [], 'links': {}}
+        finally:
+            try:
+                os.remove(tmp_input_path)
+            except OSError:
+                pass
+
+        if result.stderr:
+            logger.info("Browser helper stderr: %s", result.stderr.strip()[:800])
+
+        if result.returncode != 0:
+            logger.warning(
+                "Browser helper exited with code %s via %s; stdout=%s stderr=%s",
+                result.returncode,
+                helper_python,
+                (result.stdout or '').strip()[:400],
+                (result.stderr or '').strip()[:400],
+            )
+            return {'awemes': [], 'links': {}}
+
+        raw_stdout = (result.stdout or '').strip()
+        if not raw_stdout:
+            return {'awemes': [], 'links': {}}
+
+        try:
+            return json.loads(raw_stdout)
+        except json.JSONDecodeError:
+            logger.warning("Browser helper returned non-JSON output: %s", raw_stdout[:400])
+            return {'awemes': [], 'links': {}}
+
+    async def _recover_user_posts_via_browser(
+        self,
+        user_id: str,
+        expected_count: int = 0,
+        existing_ids: Optional[Set[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """Use a browser session to recover user posts when API pagination stalls."""
+        existing_ids = set(existing_ids or set())
+        recovery_result: Dict[str, Any] = {'awemes': [], 'links': {}}
+
+        try:
+            import playwright.async_api  # noqa: F401
+            recovery_result = await self._recover_user_posts_via_local_playwright(
+                user_id=user_id,
+                expected_count=expected_count,
+                existing_ids=existing_ids,
+            )
+        except ImportError:
+            recovery_result = await self._run_browser_recovery_subprocess(
+                user_id=user_id,
+                expected_count=expected_count,
+                existing_ids=existing_ids,
+            )
+        except Exception as e:
+            logger.warning("Local browser recovery failed: %s", e)
+            recovery_result = {'awemes': [], 'links': {}}
+
+        recovered_awemes: List[Dict[str, Any]] = []
+        recovered_ids: Set[str] = set()
+
+        for aweme in recovery_result.get('awemes') or []:
+            aweme_id = self._get_aweme_id_from_info(aweme)
+            if not aweme_id or aweme_id in existing_ids or aweme_id in recovered_ids:
+                continue
+            recovered_awemes.append(aweme)
+            recovered_ids.add(aweme_id)
+
+        link_only_ids = [
+            aweme_id for aweme_id in (recovery_result.get('links') or {}).keys()
+            if aweme_id not in existing_ids and aweme_id not in recovered_ids
+        ]
+        if link_only_ids:
+            logger.info(
+                "Browser recovery found %s extra visible post links without payloads; "
+                "fetching detail one by one",
+                len(link_only_ids),
+            )
+            for aweme_id in link_only_ids:
+                try:
+                    detail = await self._fetch_video_info(aweme_id)
+                except Exception as e:
+                    logger.warning("Fetch detail for recovered aweme %s failed: %s", aweme_id, e)
+                    continue
+
+                detail_id = self._get_aweme_id_from_info(detail or {}) or aweme_id
+                if not detail or detail_id in existing_ids or detail_id in recovered_ids:
+                    continue
+                recovered_awemes.append(detail)
+                recovered_ids.add(detail_id)
+                if expected_count and len(existing_ids) + len(recovered_ids) >= expected_count:
+                    break
+
+        return recovered_awemes
+
     async def _initialize_cookies_and_headers(self):
         """Initialize cookies and headers with local fallback cookie files."""
         if isinstance(self.cookies, str) and self.cookies.strip().lower() == 'auto':
@@ -349,10 +971,10 @@ class UnifiedDownloader:
 
     def detect_content_type(self, url: str) -> ContentType:
         """濡偓濞村┚RL閸愬懎顔愮猾璇茬€?"""
-        if '/user/' in url:
-            return ContentType.USER
-        elif '/video/' in url or 'v.douyin.com' in url:
+        if self._url_has_single_aweme_marker(url):
             return ContentType.VIDEO
+        elif '/user/' in url:
+            return ContentType.USER
         elif '/note/' in url:
             return ContentType.IMAGE
         elif '/collection/' in url or '/mix/' in url:
@@ -376,6 +998,17 @@ class UnifiedDownloader:
             except Exception as e:
                 logger.warning(f"鐟欙絾鐎介惌顓㈡懠閹恒儱銇戠拹? {e}")
         return url
+
+    def _url_has_single_aweme_marker(self, url: str) -> bool:
+        """Whether the URL clearly points to a single aweme page/modal."""
+        single_aweme_patterns = (
+            r'/video/\d+',
+            r'/note/\d+',
+            r'(^|[?&])modal_id=\d+',
+            r'(^|[?&])aweme_id=\d+',
+            r'(^|[?&])item_id=\d+',
+        )
+        return any(re.search(pattern, url) for pattern in single_aweme_patterns)
     
     def extract_id_from_url(self, url: str, content_type: ContentType = None) -> Optional[str]:
         """娴犲抖RL閹绘劕褰嘔D
@@ -385,7 +1018,7 @@ class UnifiedDownloader:
             content_type: 閸愬懎顔愮猾璇茬€烽敍鍫濆讲闁绱濋悽銊ょ艾閹稿洤顕遍幓鎰絿閿?
         """
         # 婵″倹鐏夊鑼叀閺勵垳鏁ら幋鐑姐€夐棃顫礉閻╁瓨甯撮幓鎰絿閻劍鍩汭D
-        if content_type == ContentType.USER or '/user/' in url:
+        if content_type == ContentType.USER:
             user_patterns = [
                 r'/user/([\w.-]+)',
                 r'sec_uid=([\w.-]+)'
@@ -395,9 +1028,9 @@ class UnifiedDownloader:
                 match = re.search(pattern, url)
                 if match:
                     user_id = match.group(1)
-                    logger.info(f"閹绘劕褰囬崚鎵暏閹寸īD: {user_id}")
+                    logger.info(f"提取到用户ID: {user_id}")
                     return user_id
-        
+
         # 鐟欏棝顣禝D濡€崇础閿涘牅绱崗鍫礆
         video_patterns = [
             r'/video/(\d+)',
@@ -411,8 +1044,21 @@ class UnifiedDownloader:
             match = re.search(pattern, url)
             if match:
                 video_id = match.group(1)
-                logger.info(f"閹绘劕褰囬崚鎷岊潒妫版厲D: {video_id}")
+                logger.info(f"提取到作品ID: {video_id}")
                 return video_id
+
+        if content_type is None and '/user/' in url:
+            user_patterns = [
+                r'/user/([\w.-]+)',
+                r'sec_uid=([\w.-]+)'
+            ]
+            
+            for pattern in user_patterns:
+                match = re.search(pattern, url)
+                if match:
+                    user_id = match.group(1)
+                    logger.info(f"提取到用户ID: {user_id}")
+                    return user_id
         
         # 閸忔湹绮Ο鈥崇础
         other_patterns = [
@@ -429,7 +1075,7 @@ class UnifiedDownloader:
         number_match = re.search(r'(\d{15,20})', url)
         if number_match:
             video_id = number_match.group(1)
-            logger.info(f"娴犲抖RL閹绘劕褰囬崚鐗堟殶鐎涙“D: {video_id}")
+            logger.info(f"从URL中提取到数字ID: {video_id}")
             return video_id
         
         logger.error(f"閺冪姵纭舵禒宥禦L閹绘劕褰嘔D: {url}")
@@ -534,6 +1180,13 @@ class UnifiedDownloader:
             video_info = await self.retry_manager.execute_with_retry(
                 self._fetch_video_info, video_id
             )
+
+            if not video_info and '/user/' in url and self._url_has_single_aweme_marker(url):
+                logger.info(
+                    "Direct aweme detail APIs returned empty; try recovering aweme %s from modal URL context",
+                    video_id,
+                )
+                video_info = await self._fetch_aweme_from_modal_url(url, video_id)
             
             if not video_info:
                 logger.error(f"閺冪姵纭堕懢宄板絿鐟欏棝顣舵穱鈩冧紖: {video_id}")
@@ -548,15 +1201,15 @@ class UnifiedDownloader:
             
             if success:
                 self.stats.success += 1
-                logger.info(f"閴?娑撳娴囬幋鎰: {url}")
+                logger.info(f"下载成功: {url}")
             else:
                 self.stats.failed += 1
-                logger.error(f"閴?娑撳娴囨径杈Е: {url}")
+                logger.error(f"下载失败: {url}")
             
             return success
             
         except Exception as e:
-            logger.error(f"娑撳娴囩憴鍡涱暥瀵倸鐖?{url}: {e}")
+            logger.error(f"下载单个作品异常 {url}: {e}")
             self.stats.failed += 1
             return False
         finally:
@@ -577,29 +1230,29 @@ class UnifiedDownloader:
                 if cookie_str:
                     from apiproxy.douyin import douyin_headers
                     douyin_headers['Cookie'] = cookie_str
-                    logger.info(f"鐠佸墽鐤?Cookie 閸?Douyin 缁? {cookie_str[:100]}...")
+                    logger.info(f"已将 Cookie 注入 Douyin 请求头: {cookie_str[:100]}...")
             
             try:
                 # 娴ｈ法鏁ら悳鐗堟箒閻ㄥ嫭鍨氶崝鐔风杽閻?
                 result = dy.getAwemeInfo(video_id)
                 if result:
-                    logger.info(f"Douyin 缁粯鍨氶崝鐔诲箯閸欐牞顫嬫０鎴滀繆閹? {result.get('desc', '')[:30]}")
+                    logger.info(f"Douyin 类成功返回作品信息: {result.get('desc', '')[:30]}")
                     return result
                 else:
                     logger.error("Douyin class returned empty result")
                     
             except Exception as e:
-                logger.error(f"Douyin 缁槒骞忛崣鏍潒妫版垳淇婇幁顖氥亼鐠? {e}")
+                logger.error(f"Douyin 类获取单作品信息失败: {e}")
                 
         except Exception as e:
-            logger.error(f"鐎电厧鍙嗛幋鏍﹀▏閻?Douyin 缁銇戠拹? {e}")
+            logger.error(f"导入 Douyin 类失败: {e}")
             import traceback
             traceback.print_exc()
         
         # 婵″倹鐏?Douyin 缁銇戠拹銉礉鐏忔繆鐦径鍥╂暏閹恒儱褰涢敍鍧昬sdouyin閿涘本妫ら棁鈧琗-Bogus閿?
         try:
             fallback_url = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={video_id}"
-            logger.info(f"鐏忔繆鐦径鍥╂暏閹恒儱褰涢懢宄板絿鐟欏棝顣舵穱鈩冧紖: {fallback_url}")
+            logger.info(f"尝试备用接口获取作品信息: {fallback_url}")
             
             # 鐠佸墽鐤嗛弴鎾偓姘辨暏閻ㄥ嫯顕Ч鍌氥仈
             headers = {
@@ -613,39 +1266,339 @@ class UnifiedDownloader:
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(fallback_url, headers=headers, timeout=15) as response:
-                    logger.info(f"婢跺洨鏁ら幒銉ュ經閸濆秴绨查悩鑸碘偓? {response.status}")
+                    logger.info(f"备用接口响应状态码: {response.status}")
                     if response.status != 200:
-                        logger.error(f"婢跺洨鏁ら幒銉ュ經鐠囬攱鐪版径杈Е閿涘瞼濮搁幀浣虹垳: {response.status}")
+                        logger.error(f"备用接口请求失败，状态码: {response.status}")
                         return None
                     
                     text = await response.text()
-                    logger.info(f"婢跺洨鏁ら幒銉ュ經閸濆秴绨查崘鍛啇闂€鍨: {len(text)}")
+                    logger.info(f"备用接口响应内容长度: {len(text)}")
                     
                     if not text:
-                        logger.error("婢跺洨鏁ら幒銉ュ經閸濆秴绨叉稉铏光敄")
+                        logger.error("备用接口响应为空")
                         return None
                     
                     try:
                         data = json.loads(text)
-                        logger.info(f"婢跺洨鏁ら幒銉ュ經鏉╂柨娲栭弫鐗堝祦: {data}")
                         
                         item_list = (data or {}).get('item_list') or []
                         if item_list:
                             aweme_detail = item_list[0]
-                            logger.info("婢跺洨鏁ら幒銉ュ經閹存劕濮涢懢宄板絿鐟欏棝顣舵穱鈩冧紖")
+                            logger.info("备用接口成功返回作品信息")
                             return aweme_detail
                         else:
-                            logger.error("婢跺洨鏁ら幒銉ュ經鏉╂柨娲栭惃鍕殶閹诡喕鑵戝▽鈩冩箒 item_list")
+                            logger.error("备用接口未返回 item_list")
                             
                     except json.JSONDecodeError as e:
-                        logger.error(f"婢跺洨鏁ら幒銉ュ經JSON鐟欙絾鐎芥径杈Е: {e}")
-                        logger.error(f"閸樼喎顫愰崫宥呯安閸愬懎顔? {text}")
+                        logger.error(f"备用接口 JSON 解析失败: {e}")
+                        logger.error(f"备用接口原始响应: {text}")
                         return None
                         
         except Exception as e:
-            logger.error(f"婢跺洨鏁ら幒銉ュ經閼惧嘲褰囩憴鍡涱暥娣団剝浼呮径杈Е: {e}")
+            logger.error(f"备用接口获取作品信息失败: {e}")
         
         return None
+
+    async def _fetch_aweme_from_user_page_locate(self, user_id: str, aweme_id: str) -> Optional[Dict]:
+        """Fetch a single aweme through the user-page list API with locate_item_id."""
+        if not user_id or user_id == 'self' or not aweme_id:
+            return None
+
+        platform_variants = [
+            ("Win32", "Chrome", "145.0.0.0", "Windows"),
+            ("MacIntel", "Chrome", "122.0.0.0", "Mac"),
+        ]
+        cookie_map = self._cookies_to_dict(self.cookies)
+        ms_token = cookie_map.get('msToken', '') or ''
+
+        for browser_platform, browser_name, browser_version, os_name in platform_variants:
+            try:
+                params_list = [
+                    'device_platform=webapp',
+                    'aid=6383',
+                    'channel=channel_pc_web',
+                    f'sec_user_id={user_id}',
+                    'max_cursor=0',
+                    f'locate_item_id={aweme_id}',
+                    'locate_query=false',
+                    'show_live_replay_strategy=1',
+                    'need_time_list=1',
+                    'time_list_query=0',
+                    'whale_cut_token=',
+                    'cut_version=1',
+                    'count=18',
+                    'publish_video_strategy_type=2',
+                    'from_user_page=1',
+                    'update_version_code=170400',
+                    'pc_client_type=1',
+                    'pc_libra_divert=Windows',
+                    'support_h265=1',
+                    'support_dash=0',
+                    'cpu_core_num=8',
+                    'version_code=290100',
+                    'version_name=29.1.0',
+                    'cookie_enabled=true',
+                    'screen_width=1440',
+                    'screen_height=1200',
+                    'browser_language=zh-CN',
+                    f'browser_platform={browser_platform}',
+                    f'browser_name={browser_name}',
+                    f'browser_version={browser_version}',
+                    'browser_online=true',
+                    'engine_name=Blink',
+                    f'engine_version={browser_version}',
+                    f'os_name={os_name}',
+                    'os_version=10',
+                    'device_memory=8',
+                    'platform=PC',
+                    'downlink=10',
+                    'effective_type=4g',
+                    'round_trip_time=0',
+                ]
+                if ms_token:
+                    params_list.append(f'msToken={quote(ms_token, safe="")}')
+                params = '&'.join(params_list)
+                api_url = self.urls_helper.USER_POST
+                try:
+                    full_url = f"{api_url}{self.utils.getXbogus(params)}"
+                except Exception:
+                    full_url = f"{api_url}{params}"
+
+                req_headers = dict(self.headers)
+                if cookie_map:
+                    req_headers.pop('Cookie', None)
+                async with aiohttp.ClientSession(cookies=cookie_map or None) as session:
+                    async with session.get(full_url, headers=req_headers, timeout=15) as response:
+                        if response.status != 200:
+                            continue
+                        body = await response.read()
+                        if not body:
+                            continue
+                        data = json.loads(body.decode('utf-8', errors='ignore'))
+                        aweme_list = data.get('aweme_list') or []
+                        if not isinstance(aweme_list, list):
+                            continue
+                        for aweme in aweme_list:
+                            if self._get_aweme_id_from_info(aweme) == aweme_id:
+                                logger.info(
+                                    "Recovered aweme %s from user page locate API (user=%s)",
+                                    aweme_id,
+                                    user_id,
+                                )
+                                return aweme
+            except Exception as e:
+                logger.warning(
+                    "Locate-item user page API failed for aweme %s (user=%s): %s",
+                    aweme_id,
+                    user_id,
+                    e,
+                )
+
+        return None
+
+    def _extract_target_aweme_from_payload(self, data: Dict[str, Any], aweme_id: str) -> Optional[Dict]:
+        """Extract target aweme from a browser/network response payload."""
+        if not isinstance(data, dict):
+            return None
+
+        aweme_detail = data.get('aweme_detail')
+        if isinstance(aweme_detail, dict) and self._get_aweme_id_from_info(aweme_detail) == aweme_id:
+            return aweme_detail
+
+        aweme_list = data.get('aweme_list') or []
+        if isinstance(aweme_list, list):
+            for aweme in aweme_list:
+                if self._get_aweme_id_from_info(aweme) == aweme_id:
+                    return aweme
+        return None
+
+    async def _fetch_aweme_via_local_playwright(self, url: str, aweme_id: str) -> Optional[Dict]:
+        """Open the target URL in Playwright and capture the target aweme from network responses."""
+        from playwright.async_api import async_playwright
+
+        storage_state_path = self._get_playwright_storage_state_path()
+        headless = bool(self.config.get('single_aweme_browser_headless', self.config.get('user_posts_browser_headless', False)))
+        login_timeout = int(self.config.get('single_aweme_browser_login_timeout', 300) or 300)
+        found_aweme: Optional[Dict] = None
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=headless,
+                args=['--disable-blink-features=AutomationControlled']
+            )
+            context_kwargs: Dict[str, Any] = {
+                'viewport': {'width': 1440, 'height': 1200},
+                'locale': 'zh-CN',
+                'timezone_id': 'Asia/Shanghai',
+                'user_agent': self.headers.get(
+                    'User-Agent',
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                    '(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36',
+                ),
+            }
+            if os.path.exists(storage_state_path):
+                context_kwargs['storage_state'] = storage_state_path
+
+            context = await browser.new_context(**context_kwargs)
+            if 'storage_state' not in context_kwargs:
+                cookie_records = self._build_playwright_cookie_records()
+                if cookie_records:
+                    await context.add_cookies(cookie_records)
+
+            await context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+            page = await context.new_page()
+
+            async def on_response(response):
+                nonlocal found_aweme
+                if found_aweme is not None:
+                    return
+                if '/aweme/' not in response.url:
+                    return
+                try:
+                    data = await response.json()
+                except Exception:
+                    return
+                found_aweme = self._extract_target_aweme_from_payload(data, aweme_id)
+
+            page.on('response', on_response)
+
+            try:
+                await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+                await page.wait_for_timeout(4000)
+
+                if found_aweme is None and await self._browser_profile_requires_login(page):
+                    if headless:
+                        logger.warning(
+                            "Single-aweme browser recovery still hits login wall in headless mode; "
+                            "set single_aweme_browser_headless: false and login once"
+                        )
+                        return None
+
+                    console.print(
+                        "[yellow]Please complete Douyin login in the opened browser window "
+                        "to recover this single aweme...[/yellow]"
+                    )
+                    deadline = time.time() + login_timeout
+                    while time.time() < deadline and found_aweme is None:
+                        if not await self._browser_profile_requires_login(page):
+                            await page.wait_for_timeout(3000)
+                            if found_aweme is not None:
+                                break
+                        await page.wait_for_timeout(1500)
+
+                    if found_aweme is None and await self._browser_profile_requires_login(page):
+                        logger.warning("Single-aweme browser recovery timed out waiting for login access")
+                        return None
+
+                    try:
+                        await context.storage_state(path=storage_state_path)
+                        logger.info("Saved browser storage state to %s", storage_state_path)
+                    except Exception as e:
+                        logger.warning("Failed to save browser storage state: %s", e)
+
+                for _ in range(8):
+                    if found_aweme is not None:
+                        break
+                    try:
+                        await page.mouse.wheel(0, 1800)
+                    except Exception:
+                        pass
+                    await page.wait_for_timeout(1500)
+
+                return found_aweme
+            finally:
+                await context.close()
+                await browser.close()
+
+    async def _run_browser_fetch_aweme_subprocess(self, url: str, aweme_id: str) -> Optional[Dict]:
+        """Run single-aweme browser recovery through another Python interpreter that has Playwright."""
+        helper_python = self._find_playwright_python()
+        if not helper_python:
+            logger.warning(
+                "Playwright is unavailable for single-aweme browser recovery; current interpreter: %s",
+                sys.executable,
+            )
+            return None
+
+        request_payload = {
+            'config_path': str(Path(self.config_path).resolve()),
+            'url': url,
+            'aweme_id': aweme_id,
+        }
+        login_timeout = int(self.config.get('single_aweme_browser_login_timeout', 300) or 300)
+        timeout_seconds = max(180, login_timeout + 180)
+
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False, encoding='utf-8') as tmp_file:
+            json.dump(request_payload, tmp_file, ensure_ascii=False)
+            tmp_input_path = tmp_file.name
+
+        try:
+            result = subprocess.run(
+                [
+                    helper_python,
+                    __file__,
+                    '--browser-fetch-aweme-helper',
+                    tmp_input_path,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=timeout_seconds,
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+            )
+        except Exception as e:
+            logger.warning("External single-aweme browser helper failed to start: %s", e)
+            return None
+        finally:
+            try:
+                os.remove(tmp_input_path)
+            except OSError:
+                pass
+
+        if result.stderr:
+            logger.info("Single-aweme browser helper stderr: %s", result.stderr.strip()[:800])
+
+        if result.returncode != 0:
+            logger.warning(
+                "Single-aweme browser helper exited with code %s via %s; stdout=%s stderr=%s",
+                result.returncode,
+                helper_python,
+                (result.stdout or '').strip()[:400],
+                (result.stderr or '').strip()[:400],
+            )
+            return None
+
+        raw_stdout = (result.stdout or '').strip()
+        if not raw_stdout:
+            return None
+        try:
+            return json.loads(raw_stdout)
+        except json.JSONDecodeError:
+            logger.warning("Single-aweme browser helper returned non-JSON output: %s", raw_stdout[:400])
+            return None
+
+    async def _fetch_aweme_from_modal_url(self, url: str, aweme_id: str) -> Optional[Dict]:
+        """Recover aweme info from a user-page modal URL."""
+        user_id = self.extract_id_from_url(url, ContentType.USER)
+        if user_id and user_id != 'self':
+            located_aweme = await self._fetch_aweme_from_user_page_locate(user_id, aweme_id)
+            if located_aweme:
+                return located_aweme
+
+        try:
+            import playwright.async_api  # noqa: F401
+            return await self._fetch_aweme_via_local_playwright(url, aweme_id)
+        except ImportError:
+            return await self._run_browser_fetch_aweme_subprocess(url, aweme_id)
+        except Exception as e:
+            logger.warning("Local single-aweme browser recovery failed: %s", e)
+            return None
     
     def _build_detail_params(self, aweme_id: str) -> str:
         """閺嬪嫬缂撶拠锔藉剰API閸欏倹鏆?"""
@@ -1180,12 +2133,51 @@ class UnifiedDownloader:
         except Exception as e:
             logger.error(f"娑撳娴囬悽銊﹀煕娑撳銆夋径杈Е: {e}")
             return False
+
+    async def _process_user_post_aweme(self, aweme: Dict, user_id: str, downloaded: int, progress) -> bool:
+        """Download one aweme inside the user-post workflow."""
+        if not self._check_time_filter(aweme):
+            return False
+
+        if self._should_skip_increment('post', aweme, sec_uid=user_id):
+            return False
+
+        task_id = progress.add_task(
+            f"Downloading post {downloaded + 1}",
+            total=100
+        )
+        success = await self._download_media_files(aweme, progress)
+
+        if success:
+            self.stats.success += 1
+            progress.update(task_id, completed=100)
+            self._record_increment('post', aweme, sec_uid=user_id)
+            return True
+
+        self.stats.failed += 1
+        progress.update(task_id, description="[red]Download failed[/red]")
+        return False
     
     async def _download_user_posts(self, user_id: str):
         """Download posts published by the user."""
         max_count = self.config.get('number', {}).get('post', 0)
         cursor = 0
         downloaded = 0
+        seen_aweme_ids: Set[str] = set()
+        expected_post_count = 0
+
+        profile = await self._fetch_user_profile(user_id)
+        if profile:
+            try:
+                expected_post_count = int(profile.get('aweme_count') or 0)
+            except Exception:
+                expected_post_count = 0
+            if expected_post_count:
+                logger.info(
+                    "User profile reports %s public posts for %s",
+                    expected_post_count,
+                    profile.get('nickname') or user_id,
+                )
         
         console.print("\n[green]Start downloading user posts...[/green]")
         
@@ -1213,41 +2205,64 @@ class UnifiedDownloader:
                 
                 # 娑撳娴囨担婊冩惂
                 for aweme in aweme_list:
+                    aweme_id = self._get_aweme_id_from_info(aweme)
+                    if aweme_id:
+                        if aweme_id in seen_aweme_ids:
+                            continue
+                        seen_aweme_ids.add(aweme_id)
+
                     if max_count > 0 and downloaded >= max_count:
                         console.print(f"[yellow]Reached download limit: {max_count}[/yellow]")
                         return
-                    
-                    # 閺冨爼妫挎潻鍥ㄦ姢
-                    if not self._check_time_filter(aweme):
-                        continue
-                    
-                    # 閸掓稑缂撴稉瀣祰娴犺濮?
-                    task_id = progress.add_task(
-                        f"Downloading post {downloaded + 1}",
-                        total=100
-                    )
-                    
-                    # 婢х偤鍣洪崚銈嗘焽
-                    if self._should_skip_increment('post', aweme, sec_uid=user_id):
-                        continue
-                    
-                    # 娑撳娴?
-                    success = await self._download_media_files(aweme, progress)
-                    
+
+                    success = await self._process_user_post_aweme(aweme, user_id, downloaded, progress)
                     if success:
                         downloaded += 1
-                        self.stats.success += 1  # 婢х偛濮為幋鎰鐠佲剝鏆?
-                        progress.update(task_id, completed=100)
-                        self._record_increment('post', aweme, sec_uid=user_id)
-                    else:
-                        self.stats.failed += 1  # 婢х偛濮炴径杈Е鐠佲剝鏆?
-                        progress.update(task_id, description="[red]Download failed[/red]")
                 
                 # 濡偓閺屻儲妲搁崥锔芥箒閺囨潙顦?
                 if not posts_data.get('has_more'):
                     break
                 
-                cursor = posts_data.get('max_cursor', 0)
+                next_cursor = posts_data.get('max_cursor', 0)
+                if next_cursor == cursor:
+                    logger.warning("User post api returned the same cursor twice; stop paging")
+                    break
+                cursor = next_cursor
+
+            should_try_browser_recovery = bool(self.config.get('user_posts_browser_recovery', True))
+            if (
+                should_try_browser_recovery
+                and expected_post_count
+                and expected_post_count > len(seen_aweme_ids)
+                and (max_count <= 0 or len(seen_aweme_ids) < max_count)
+            ):
+                console.print(
+                    f"[yellow]API fetched {len(seen_aweme_ids)} / {expected_post_count} posts. "
+                    "Starting browser-assisted recovery...[/yellow]"
+                )
+                recovered_awemes = await self._recover_user_posts_via_browser(
+                    user_id,
+                    expected_count=expected_post_count,
+                    existing_ids=seen_aweme_ids,
+                )
+                logger.info(
+                    "Browser-assisted recovery returned %s additional post payloads",
+                    len(recovered_awemes),
+                )
+                for aweme in recovered_awemes:
+                    aweme_id = self._get_aweme_id_from_info(aweme)
+                    if aweme_id:
+                        if aweme_id in seen_aweme_ids:
+                            continue
+                        seen_aweme_ids.add(aweme_id)
+
+                    if max_count > 0 and downloaded >= max_count:
+                        console.print(f"[yellow]Reached download limit: {max_count}[/yellow]")
+                        return
+
+                    success = await self._process_user_post_aweme(aweme, user_id, downloaded, progress)
+                    if success:
+                        downloaded += 1
         
         console.print(f"[green]User posts completed, downloaded {downloaded} item(s).[/green]")
     
@@ -1355,11 +2370,27 @@ class UnifiedDownloader:
         # Strategy 2: fallback to original Douyin class implementation.
         try:
             from apiproxy.douyin.douyin import Douyin
+            import apiproxy.douyin.douyin as douyin_module
+
+            silent_output = io.StringIO()
             cookie_str = self._build_cookie_string()
             if cookie_str:
                 douyin_headers['Cookie'] = cookie_str
             dy = Douyin(database=False)
-            result = dy.getUserInfo(user_id, "post", 35, 0, False, "", "")
+            silent_console = Console(
+                file=silent_output,
+                force_terminal=False,
+                no_color=True,
+                emoji=False,
+                highlight=False,
+            )
+            if hasattr(dy, 'console'):
+                dy.console = silent_console
+            if hasattr(douyin_module, 'console'):
+                douyin_module.console = silent_console
+
+            with contextlib.redirect_stdout(silent_output), contextlib.redirect_stderr(silent_output):
+                result = dy.getUserInfo(user_id, "post", 35, 0, False, "", "")
             if result is None:
                 logger.error("Douyin class returned None")
                 return None
@@ -1377,9 +2408,7 @@ class UnifiedDownloader:
                 'has_more': False,
             }
         except Exception as e:
-            logger.error(f"Fetch user posts failed in fallback strategy: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Fetch user posts failed in fallback strategy: {e}")
             return None
 
     async def _download_user_likes(self, user_id: str):
@@ -1913,6 +2942,63 @@ class UnifiedDownloader:
         console.print("\n[bold green]Download task completed[/bold green]")
 
 
+def _browser_recovery_helper_main(input_path: str):
+    """Hidden helper entrypoint used by another interpreter that has Playwright."""
+    global console
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+    console = Console(file=sys.stderr)
+
+    with open(input_path, 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+
+    config_path = payload.get('config_path') or 'config_simple.yml'
+    user_id = str(payload.get('user_id') or '').strip()
+    expected_count = int(payload.get('expected_count') or 0)
+    existing_ids = set(payload.get('existing_ids') or [])
+
+    downloader = UnifiedDownloader(config_path)
+
+    async def runner():
+        await downloader._initialize_cookies_and_headers()
+        result = await downloader._recover_user_posts_via_local_playwright(
+            user_id=user_id,
+            expected_count=expected_count,
+            existing_ids=existing_ids,
+        )
+        sys.stdout.write(json.dumps(result, ensure_ascii=False))
+
+    asyncio.run(runner())
+
+
+def _browser_fetch_aweme_helper_main(input_path: str):
+    """Hidden helper entrypoint for single-aweme browser recovery."""
+    global console
+    if hasattr(sys.stdout, 'reconfigure'):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, 'reconfigure'):
+        sys.stderr.reconfigure(encoding='utf-8')
+    console = Console(file=sys.stderr)
+
+    with open(input_path, 'r', encoding='utf-8') as f:
+        payload = json.load(f)
+
+    config_path = payload.get('config_path') or 'config_simple.yml'
+    url = str(payload.get('url') or '').strip()
+    aweme_id = str(payload.get('aweme_id') or '').strip()
+
+    downloader = UnifiedDownloader(config_path)
+
+    async def runner():
+        await downloader._initialize_cookies_and_headers()
+        result = await downloader._fetch_aweme_via_local_playwright(url, aweme_id)
+        sys.stdout.write(json.dumps(result, ensure_ascii=False))
+
+    asyncio.run(runner())
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -1957,9 +3043,26 @@ def main():
         action='store_false',
         help='Disable pre-download backfill slicing check'
     )
+    parser.add_argument(
+        '--browser-recover-user-posts-helper',
+        dest='browser_recover_helper_input',
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        '--browser-fetch-aweme-helper',
+        dest='browser_fetch_aweme_helper_input',
+        help=argparse.SUPPRESS,
+    )
     parser.set_defaults(slice_backfill_on_run=None)
     
     args = parser.parse_args()
+
+    if args.browser_recover_helper_input:
+        _browser_recovery_helper_main(args.browser_recover_helper_input)
+        return
+    if args.browser_fetch_aweme_helper_input:
+        _browser_fetch_aweme_helper_main(args.browser_fetch_aweme_helper_input)
+        return
     
     # 缂佸嫬鎮庨柊宥囩枂閺夈儲绨敍姘喘閸忓牆鎳℃禒銈堫攽
     temp_config = {}

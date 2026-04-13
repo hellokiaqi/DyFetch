@@ -1,110 +1,145 @@
-# 抖音下载器使用说明
+# ????
 
-## 🚀 快速开始
+## ?????
 
-### 1. 安装依赖
+### 1. ????
+
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 配置 Cookie（首次使用需要）
+???????????? Cookie?
+
 ```bash
-# 自动获取（推荐）
+pip install playwright
+playwright install chromium
+```
+
+### 2. ?? Cookie
+
+```bash
 python cookie_extractor.py
-
-# 或手动获取
-python get_cookies_manual.py
 ```
 
-### 3. 开始下载
+### 3. ?????
 
-#### V1.0 稳定版（推荐用于单个视频）
 ```bash
-# 编辑 config.yml 配置文件
-# 然后运行
-python DouYinCommand.py
+python downloader.py -c config_simple.yml -u "????"
 ```
 
-#### V2.0 增强版（推荐用于用户主页）
-```bash
-# 下载用户主页
-python downloader.py -u "https://www.douyin.com/user/xxxxx"
-
-# 自动获取 Cookie 并下载
-python downloader.py --auto-cookie -u "https://www.douyin.com/user/xxxxx"
-
-# 全量下载并指定输出目录（请确保 number.post=0）
-python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/xxxxx" --path "./my_videos/"
-```
-
-### 4. 用简易 UI 运行（省事）
+??? UI?
 
 ```bash
 python ui.py
 ```
 
-- 支持一键运行 `downloader.py`，不需要手敲整条命令
-- 自动记录 URL、配置路径、输出路径
-- 自动提取并保存 `user_id`，后续可直接选择复用
-- `Username` 为手动维护：选中记录后点 `Set Name` 弹窗填写
-- `Refresh` 仅刷新本地记录，不再自动请求昵称，避免接口重试刷屏
-- `Saved Records` 支持横向滚动，长 URL 可左右拖动查看
-- 可勾选“Backfill slices for old video folders”，下载前自动补切旧视频目录
+## ????
 
-### 图文/片段作品输出规则（V2.1）
+### ???? / ??
 
-- `clip_<index>.mp4`：图文作品中的视频片段下载成功时输出
-- `image_<index>.jpg`：纯图片，或片段 URL 全部失败后的回退结果
-- `frames/*.jpg`：对下载到的视频切帧后的图片（默认每秒 10 张）
-- 下载器会优先尝试非水印地址；如果源站未提供无水印地址，回退结果可能带水印
-- 同一条作品下多个片段的切帧结果会保存在同一个 `frames/` 子目录
-
-#### 切帧配置（config_simple.yml）
-
-```yaml
-slice_videos: true      # 开启视频切帧（普通视频 + 图文片段）
-slice_fps: 10          # 每秒截图次数
-slice_subdir: frames   # 切帧输出子目录名
-slice_backfill_on_run: false  # 启动时补切旧目录（有视频且无切片目录）
-auto_install_ffmpeg: true  # ffmpeg 缺失时自动安装 imageio-ffmpeg
-# ffmpeg_bin: ffmpeg   # 可选：自定义 ffmpeg 路径
+```bash
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/video/1234567890123456789"
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/note/1234567890123456789"
 ```
 
-> 默认会自动安装 `imageio-ffmpeg` 提供 ffmpeg；若安装失败，则跳过切帧但不影响视频下载。
+### ????????????
 
-## 📋 版本对比
+```bash
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAAeEVIdxtFC-y5UG_8coku6gHwWJ4itLMnGtYNULV4VZ8?from_tab_name=main&modal_id=7628190562495340004&vid=7628190562495340004"
+```
 
-| 功能 | V1.0 (DouYinCommand.py) | V2.0 (downloader.py) |
-|------|------------------------|---------------------|
-| 单个视频下载 | ✅ 完全正常 | ✅ 可用（已增强重试与兜底） |
-| 用户主页下载 | ✅ 正常 | ✅ 完全正常 |
-| Cookie 管理 | 手动配置 | 自动获取 |
-| Cookie 兜底 | ❌ | ✅ 自动合并 config/cookies.txt/cookies.pkl |
-| 图文 403 处理 | 一般 | ✅ 多 URL 自动回退 |
-| 图文片段视频 | ❌ | ✅ 优先下载 `clip_<index>.mp4`，失败回退 `image_<index>.jpg` |
-| 视频切帧 | ❌ | ✅ 普通视频 + 图文片段按 `slice_fps` 自动抽帧到 `frames/` |
-| 水印控制策略 | 一般 | ✅ 优先非水印地址，必要时回退可用地址 |
-| 使用复杂度 | 简单 | 中等 |
-| 稳定性 | 高 | 中等 |
+### `user/self` ??????????
 
-## 🎯 推荐使用场景
+```bash
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/self?from_tab_name=main&modal_id=7628190562495340004&showTab=like"
+```
 
-- **下载单个视频**：使用 V1.0
-- **下载用户主页**：使用 V2.0
-- **批量下载**：使用 V2.0
-- **学习研究**：两个版本都可以
+### ????????
 
-## 📞 获取帮助
+```bash
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/SEC_USER_ID" --path "./Downloaded/"
+```
 
-- 查看详细文档：`README.md`
-- 报告问题：[GitHub Issues](https://github.com/jiji262/douyin-downloader/issues)
+### ????????????
 
-## 🔁 失败补下载
+```bash
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/SEC_USER_ID" --slice-backfill
+```
 
-如果出现“已找到全部作品，但少量失败（例如 11 个）”，按这个流程处理：
+## `config_simple.yml` ???
 
-1. 在 `config_simple.yml` 中设置 `number.post: 0`（全量）。
-2. 使用同一条命令再次运行，保持同一个 `--path`。
-3. 程序会自动跳过已下载文件，只补失败项。
-4. 若仍有失败，查看 `downloader.log` 中对应状态码（常见为 403），再重跑一次通常还能补齐一部分。
-5. 若某些图文作品目录下只有 `image_<index>.jpg` 没有 `clip_<index>.mp4`，通常表示该片段未返回可用视频地址或被源站限制。
+```yaml
+link:
+  - https://www.douyin.com/user/SEC_USER_ID
+
+path: ./Downloaded/
+
+music: true
+cover: true
+avatar: false
+json: true
+
+slice_videos: true
+slice_fps: 10
+slice_subdir: frames
+slice_backfill_on_run: false
+auto_install_ffmpeg: true
+
+mode:
+  - post
+
+number:
+  post: 0
+  like: 0
+
+thread: 5
+retry_times: 3
+
+cookies: auto
+# ???????? cookie ??? / ??
+```
+
+## UI ??
+
+`ui.py` ?????
+
+- ???? URL ????
+- ??????
+- ???????
+- ?????????
+- ???? `Username`
+- UTF-8 ????? Windows ????
+
+## ??????
+
+### ?????????
+
+?????????
+
+1. ???? API
+2. ? `Douyin` ???
+3. HTML / ????????
+4. Playwright ?????
+
+### ?????????
+
+?????????
+
+1. ??????
+2. `iteminfo` ????
+3. ??? `locate_item_id` ??
+4. Playwright ?????
+
+## ??????
+
+???????????????
+
+- `cookies.txt`
+- `cookies.pkl`
+- `storage_state.json`
+- `downloader.log`
+- `logs/`
+- `data.db`
+- `Downloaded/`
+- `my_videos/`
+- `my_videos_fix/`

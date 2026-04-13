@@ -35,6 +35,7 @@ class CookieExtractor:
     def __init__(self, config_path: str = "config_simple.yml"):
         self.config_path = config_path
         self.cookies = {}
+        self.storage_state_path = Path("storage_state.json")
         
     async def extract_cookies(self, headless: bool = False) -> Dict:
         """提取Cookie
@@ -119,6 +120,14 @@ class CookieExtractor:
                     with open('cookies.txt', 'w', encoding='utf-8') as f:
                         f.write(cookie_string.strip())
                     console.print("[green]✅ 完整Cookie已保存到 cookies.txt[/green]")
+
+                    try:
+                        await context.storage_state(path=str(self.storage_state_path))
+                        console.print(
+                            f"[green]✅ Playwright storage state已保存到 {self.storage_state_path}[/green]"
+                        )
+                    except Exception as e:
+                        console.print(f"[yellow]Storage state保存失败: {e}[/yellow]")
                     
                     return cookie_dict
                 else:
@@ -235,6 +244,13 @@ class CookieExtractor:
                         if cookie_dict:
                             console.print("[green]✅ 成功提取Cookie！[/green]")
                             self._save_cookies(cookie_dict)
+                            try:
+                                await context.storage_state(path=str(self.storage_state_path))
+                                console.print(
+                                    f"[green]✅ Playwright storage state已保存到 {self.storage_state_path}[/green]"
+                                )
+                            except Exception as e:
+                                console.print(f"[yellow]Storage state保存失败: {e}[/yellow]")
                             return cookie_dict
                         else:
                             console.print("[red]未找到抖音Cookie[/red]")

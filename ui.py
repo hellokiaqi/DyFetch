@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import json
+import os
 import queue
 import re
 import subprocess
@@ -387,11 +388,16 @@ class DownloaderUI:
         self.append_log("Running: " + " ".join(cmd) + "\n")
 
         try:
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
+            env["PYTHONUNBUFFERED"] = "1"
             self.process = subprocess.Popen(
                 cmd,
                 cwd=str(self.base_dir),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
+                env=env,
                 text=True,
                 encoding="utf-8",
                 errors="replace",

@@ -1,13 +1,15 @@
-# 第三方许可声明
+# Third-Party Notices
 
-本项目包含来自以下开源项目的代码，其版权归原作者所有，许可条款如下。
+DyFetch contains code originating from the projects listed below. Copyright remains with the
+original authors, and the terms of each license apply to the corresponding portions.
 
 ## jiji262/douyin-downloader
 
-- 来源：<https://github.com/jiji262/douyin-downloader>
-- 许可：MIT
-- 涉及部分：`dy-downloader/` 目录；`apiproxy/` 下的接口封装（`douyinapi`、`urls`、`result`、`database`）
-  与 `DouYinCommand.py` 命令行入口沿用其早期版本的组织方式；`downloader.py` 在其基础上重写。
+- Source: <https://github.com/jiji262/douyin-downloader>
+- License: MIT
+- Used in: the `dy-downloader/` directory; the API wrappers under `apiproxy/` (`douyinapi`,
+  `urls`, `result`, `database`) and the `DouYinCommand.py` entry point, which follow the layout of
+  that project's earlier versions; `downloader.py`, rewritten and extended from the original logic.
 
 ```
 MIT License
@@ -33,11 +35,12 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-## Evil0ctal/Douyin_TikTok_Download_API
+## X-Bogus implementation by Evil0ctal
 
-- 来源：<https://github.com/Evil0ctal/Douyin_TikTok_Download_API>
-- 许可：Apache License 2.0
-- 涉及部分：`dy-downloader/utils/xbogus.py`（X-Bogus 签名实现），原始版权声明保留在文件头部。
+- Origin: <https://github.com/Evil0ctal/Douyin_TikTok_Download_API>
+- License: Apache License 2.0
+- Used in: `dy-downloader/utils/xbogus.py`, which is bundled with the upstream project above. The
+  original copyright header is retained in the file.
 
 ```
 Copyright (C) 2021 Evil0ctal
@@ -55,9 +58,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ```
 
-Apache License 2.0 全文见 [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt)。
+The full Apache License 2.0 text is available in
+[licenses/Apache-2.0.txt](licenses/Apache-2.0.txt).
 
-## 说明
+## Notes
 
-本项目整体以 MIT 许可发布，见 [LICENSE](LICENSE)。上述第三方代码的版权与许可声明不得移除；
-Apache-2.0 部分不要求衍生作品整体采用同一许可证。
+DyFetch itself is released under the MIT license; see [LICENSE](LICENSE). The copyright and license
+notices above must be retained in redistributions. The Apache-2.0 portion does not require derivative
+works to adopt the same license.

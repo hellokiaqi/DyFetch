@@ -1,282 +1,300 @@
 # DyFetch
 
-DyFetch（抖音下载器）用于下载抖音平台的视频、图文、作者主页与合集内容，提供命令行与桌面图形界面
-两种使用方式，下载完成后可按指定帧率抽帧。
+[简体中文](README.zh-CN.md) | English
 
-主程序为 `downloader.py`，图形界面为 `ui.py`。
+DyFetch downloads videos, image posts, user profiles, collections and music pages from Douyin.
+It provides a command-line interface and a desktop GUI, and can extract frames from downloaded
+videos at a fixed rate.
 
-## 支持范围
+The main program is `downloader.py`; the GUI is `ui.py`.
 
-- 视频作品与图文作品
-- 作者主页：作品批量下载、点赞内容、合集列表
-- 主页链接携带 `modal_id` 或 `vid` 参数时，仅下载该单一作品
-- 合集页面与音乐页面下的作品列表
-- `v.douyin.com` 形式的短链接
+## Scope
 
-除主体内容外，可选择保存背景音乐、封面、作者头像与原始 JSON 数据，并将视频按秒抽帧至
-`frames/` 目录。
+- Single video and image posts
+- User profiles: all posts, liked posts, collections
+- Profile links carrying `modal_id` or `vid` are treated as a single post
+- Collection pages and music pages
+- Short links of the form `v.douyin.com/...`
 
-当接口未返回数据时，程序会自动改用浏览器方式获取内容。因此公开作品在登录态失效的情况下
-仍可下载，代价是单个作品的处理时间增加至 6 至 8 秒。
+Background music, cover images, author avatars and the raw JSON payload can be saved next to the
+media. Videos can be sliced into frames under `frames/`.
 
-## 环境要求与安装
+When an API call returns no data, DyFetch falls back to a browser and reads the page. Public posts
+therefore stay downloadable with an expired session, at the cost of about six to eight seconds per
+post.
 
-需要 Python 3.8 或以上版本。
+## Requirements
+
+Python 3.8 or newer.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-抽帧默认使用 `imageio-ffmpeg` 内置的 ffmpeg，无需单独安装；系统中已存在 ffmpeg 时也可直接使用。
+Frame extraction uses the ffmpeg binary bundled with `imageio-ffmpeg`, so no separate installation is
+needed. An existing system ffmpeg can be used instead.
 
-浏览器方式依赖 Playwright：
+The browser fallback requires Playwright:
 
 ```bash
 pip install playwright
 playwright install chromium
 ```
 
-`cut.py` 为独立的逐帧导出工具，依赖 OpenCV：
+`cut.py` is a standalone frame exporter built on OpenCV:
 
 ```bash
 pip install opencv-python tqdm
 ```
 
-## 登录凭据
+## Credentials
 
-抖音接口通常需要登录态。获取方式有两种。
+The Douyin web APIs generally require a signed-in session. There are two ways to provide one.
 
-**自动获取（推荐）**
+**Automatic**
 
 ```bash
 python cookie_extractor.py
 ```
 
-执行后将生成 `cookies.txt`、`cookies.pkl` 与 `storage_state.json`，程序会自动读取。
+This writes `cookies.txt`, `cookies.pkl` and `storage_state.json`, which DyFetch reads
+automatically.
 
-**手工填写**
+**Manual**
 
-在配置文件中直接填写 `cookies`，支持字符串或字典两种形式。`config_simple.yml` 默认为
-`cookies: auto`，表示优先读取本地文件，缺失时再通过浏览器获取。
+Set `cookies` in the configuration file, either as a cookie string or as a mapping.
+`config_simple.yml` uses `cookies: auto`, which reads local files first and falls back to the browser
+when none are present.
 
-## 使用方式
+## Usage
 
-### 命令行
+### Command line
 
-下载单个作品：
+Download a single post:
 
 ```bash
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/video/1234567890123456789"
 ```
 
-下载作者主页的全部作品：
+Download every post on a profile:
 
 ```bash
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
 
-若主页链接携带 `modal_id` 或 `vid` 参数，则仅下载对应作品，不遍历整页。
+If the profile link carries `modal_id` or `vid`, only that post is downloaded.
 
-下载本人主页的点赞或收藏内容：
+Download your own liked or collected posts:
 
 ```bash
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/self?...&showTab=like"
 ```
 
-指定输出目录，或为历史目录补充切帧：
+Change the output directory, or backfill frames for an existing tree:
 
 ```bash
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/SEC_USER_ID" --path "./Downloaded/"
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/SEC_USER_ID" --slice-backfill
 ```
 
-参数说明：
-
-| 参数 | 说明 |
+| Option | Description |
 | --- | --- |
-| `-c, --config` | 配置文件路径，默认 `config.yml`，不存在时回退至 `config_simple.yml` |
-| `-u, --url` | 一个或多个链接，可一次传入多项 |
-| `-p, --path` | 输出目录，覆盖配置文件中的 `path` |
-| `--auto-cookie` | 使用 Playwright 获取 Cookie |
-| `--cookie` | 直接传入 Cookie 字符串 |
-| `--slice-backfill` / `--no-slice-backfill` | 运行前是否对历史目录补充切帧 |
-| `--refresh-session` | 刷新并保存登录态，不下载任何内容 |
+| `-c, --config` | Configuration file. Defaults to `config.yml`, falling back to `config_simple.yml`. |
+| `-u, --url` | One or more links. |
+| `-p, --path` | Output directory, overriding `path` from the configuration. |
+| `--auto-cookie` | Obtain cookies through Playwright. |
+| `--cookie` | Pass a cookie string directly. |
+| `--slice-backfill` / `--no-slice-backfill` | Enable or disable frame backfill before a run. |
+| `--refresh-session` | Refresh and save the session without downloading anything. |
 
-### 图形界面
+### Desktop GUI
 
 ```bash
 python ui.py
 ```
 
-![界面预览](docs/ui-preview.png)
+![Interface](docs/ui-preview.png)
 
-界面将链接加入下载队列后可批量执行，支持实时日志（按级别过滤、关键字搜索、导出）、
-下载参数设置（抽帧帧率、数量上限、下载模式、并发与重试）、浅色与深色主题切换。
-快捷键为 `Ctrl+Enter` 开始下载、`Esc` 停止任务。
+Links are queued and processed in sequence. The window offers a live log with level filtering,
+keyword search and export, a settings page for frame rate, item limits, download mode, concurrency
+and retries, and light and dark themes. `Ctrl+Enter` starts a run and `Esc` stops it.
 
-界面中的设置写入独立的 `ui_run_config.yml`，不会修改原始配置文件。
+Settings changed in the GUI are written to `ui_run_config.yml` and leave the original configuration
+files untouched.
 
-## 输出结构
+## Output layout
 
 ```
-<path>/<作者昵称>/<发布时间>_<作品描述>_<作品ID>/
-├── clip_1.mp4              图文作品的视频片段，或视频作品的分段文件
-├── image_1.jpg             图文作品的图片
-├── <文件夹名>.mp4          单个视频作品
-├── <文件夹名>_music.mp3    背景音乐
-├── <文件夹名>_cover.jpg    封面
-├── <文件夹名>_data.json    原始元数据
-└── frames/                 切帧结果
+<path>/<author>/<published_at>_<description>_<aweme_id>/
+├── clip_1.mp4               video segment of an image post, or a split of a video post
+├── image_1.jpg              image of an image post
+├── <folder name>.mp4        single video post
+├── <folder name>_music.mp3  background music
+├── <folder name>_cover.jpg  cover image
+├── <folder name>_data.json  raw metadata
+└── frames/                  extracted frames
     └── clip_01_000001.jpg
 ```
 
-文件夹名包含作品 ID，同一作者的不同作品不会写入同一目录。已存在的文件会被跳过，
-重复执行不会重复下载。
+Folder names include the post ID, so different posts never share a directory. Existing files are
+skipped, which makes repeated runs safe.
 
-## 配置说明
+## Configuration
 
-`config_simple.yml` 常用配置项：
+Common options in `config_simple.yml`:
 
 ```yaml
-link:                     # 链接列表，与命令行的 -u 二选一
+link:                     # link list, an alternative to -u
   - https://www.douyin.com/user/SEC_USER_ID
 
-path: ./Downloaded/       # 输出目录
+path: ./Downloaded/       # output directory
 
-music: true               # 保存背景音乐
-cover: true               # 保存封面
-avatar: false             # 保存作者头像
-json: true                # 保存原始 JSON
+music: true               # save background music
+cover: true               # save cover image
+avatar: false             # save author avatar
+json: true                # save raw JSON
 
-slice_videos: true        # 是否切帧
-slice_fps: 10             # 每秒抽帧数
-slice_subdir: frames      # 帧目录名称
-slice_backfill_on_run: false   # 运行前为历史目录补充切帧
-auto_install_ffmpeg: true      # 缺少 ffmpeg 时自动安装
-# ffmpeg_bin: ffmpeg           # 也可指定 ffmpeg 可执行文件路径
+slice_videos: true        # enable frame extraction
+slice_fps: 10             # frames per second
+slice_subdir: frames      # frame directory name
+slice_backfill_on_run: false   # backfill frames before a run
+auto_install_ffmpeg: true      # install ffmpeg automatically when missing
+# ffmpeg_bin: ffmpeg           # or point at a specific binary
 
-mode:                     # 主页下载内容
+mode:                     # what to download from a profile
   - post                  # post / like / mix
 
-number:                   # 数量上限，0 表示不限制
+number:                   # item limits, 0 means unlimited
   post: 0
   like: 0
 
-thread: 5                 # 并发数
-retry_times: 3            # 重试次数
+thread: 5                 # concurrency
+retry_times: 3            # retry count
 
-cookies: auto             # auto / Cookie 字符串 / Cookie 字典
+cookies: auto             # auto / cookie string / cookie mapping
 
-start_time: ""            # 时间过滤，格式 YYYY-MM-DD，包含首尾两天
+start_time: ""            # date filter, YYYY-MM-DD, both ends inclusive
 end_time: ""
 ```
 
-浏览器方式相关配置：
+Browser fallback options:
 
 ```yaml
-user_posts_browser_recovery: true    # 主页作品抓取不全时使用浏览器补充
-user_posts_browser_headless: false   # 补充时浏览器是否以无头模式运行
+user_posts_browser_recovery: true    # use a browser when profile paging is incomplete
+user_posts_browser_headless: false   # run that browser headless
 
-single_aweme_browser_recovery: true  # 单作品接口无数据时使用浏览器获取
-single_aweme_browser_headless: true  # 单作品补充默认无头运行，速度较快
+single_aweme_browser_recovery: true  # use a browser when a single post returns no data
+single_aweme_browser_headless: true  # headless by default, which is faster
 ```
 
-## 登录态与续期
+## Session state and renewal
 
-登录态过期后，接口会返回 HTTP 200 但响应内容为空，容易被误判为程序故障。因此程序在启动时
-会解析 `sid_guard` 判断有效期，过期时输出提示：
+Once a session expires, the API returns HTTP 200 with an empty body, which is easily mistaken for a
+bug. DyFetch parses `sid_guard` at startup and reports the expiry. The program prints its own
+messages in Chinese:
 
 ```
 ⚠ Cookie 登录状态已于 2026-04-05 22:23 过期，请重新运行 cookie_extractor.py 登录
 ```
 
-为避免重复登录，程序会把服务端每次响应下发的 `Set-Cookie`（包括 `sessionid`、`sid_guard`
-等）合并并写回 `cookies.txt`、`cookies.pkl` 与 `storage_state.json`。抖音在有效期内会持续
-延长该会话，只要保持一定使用频率，登录态可长期有效。
+Every `Set-Cookie` value returned by the server is merged back into `cookies.txt`, `cookies.pkl` and
+`storage_state.json`. Douyin extends the session while it is in use, so regular operation keeps it
+alive without a new sign-in.
 
-程序启动时还会输出当前有效期，例如 `登录态有效期至 2026-11-18（剩余 30 天）`，图形界面右上角
-同步显示。如需主动续期：
+Startup output also prints the remaining validity, for example `登录态有效期至 2026-11-18（剩余 30
+天）`, meaning the session is valid until 2026-11-18 with 30 days left. The GUI shows the same
+information in its header. To renew explicitly:
 
 ```bash
 python downloader.py -c config_simple.yml --refresh-session
 ```
 
-或点击界面中的「下载设置 → 续期登录」。该命令不会下载内容，仅读取浏览器中的最新登录态并写回本地。
+Or use **Settings → Renew sign-in** in the GUI. That command downloads nothing; it reads the current
+session from the browser and writes it back.
 
-自动续期失败后，程序会在 6 小时内跳过再次尝试（记录于 `.session_refresh_state.json`），
-以避免每次运行产生额外等待。若已重新登录，可使用 `--refresh-session` 强制刷新。
+After a failed automatic refresh, DyFetch skips further attempts for six hours, recorded in
+`.session_refresh_state.json`, so runs do not stall. Use `--refresh-session` to force a refresh after
+signing in again.
 
-以下情况无法通过程序规避，需要重新登录：登录态超过有效期且长期未使用；修改密码、
-在其他设备退出登录；或触发平台风控。
+A few situations still require a new sign-in: the session expired during a long period of
+inactivity, the password was changed, the account was signed out on another device, or the platform
+raised a risk control flag.
 
-## 主页批量下载
+## Profile downloads
 
-配置 `mode: post` 时下载主页中的全部作品，`number.post` 可限制数量，0 表示不限制。
+With `mode: post`, every post on the profile is downloaded. `number.post` sets a limit, and 0 means
+unlimited.
 
-登录态有效时通过接口分页获取，单个作品耗时通常不足 1 秒。登录态失效时，程序会打开浏览器
-逐屏收集作品链接，再逐个打开作品页获取详情，速度明显下降。实测对含 26 条作品的主页，
-在登录态失效的情况下完成 24 条作品下载、0 条失败，总耗时约 4 分钟。
+With a valid session, paging goes through the API and a post usually takes under a second. With an
+expired session, DyFetch opens a browser, collects post links screen by screen, then opens each post
+page in turn. That is noticeably slower: on a profile holding 26 posts, a run with an expired session
+finished 24 posts with no failures in roughly four minutes.
 
-点赞与合集内容仍依赖接口分页，需要有效登录态。
+Liked posts and collections still depend on the API and need a valid session.
 
-## 常见问题
+## Troubleshooting
 
-### 下载数量为 0，或接口持续返回 403
+### Zero downloads, or the API keeps returning 403
 
-首先查看启动时输出的登录态有效期提示。若显示已过期，重新执行 `python cookie_extractor.py`。
-若未过期，检查 `number.post` 是否被设为 0 以外的值，以及目标内容是否需要登录才能访问。
+Check the expiry line printed at startup. If it reports a date in the past, run
+`python cookie_extractor.py` again. If the session is valid, check that `number.post` was not set to
+a non-zero value by accident, and whether the target content requires a signed-in account.
 
-### 主页作品下载不完整
+### A profile returns fewer posts than expected
 
-程序依次尝试：接口分页、`iteminfo` 备用接口、`locate_item_id` 定位、浏览器逐屏收集。
-前三种依赖登录态，最后一种不依赖但速度较慢。可将 `user_posts_browser_headless` 设为
-`false`，在浏览器窗口可见的情况下手动完成登录。
+DyFetch tries the paged API, the `iteminfo` fallback, `locate_item_id` lookup, and finally a browser
+sweep. The first three need a valid session; the last does not, but is slower. Setting
+`user_posts_browser_headless` to `false` makes the browser visible, which allows signing in by hand
+when the profile is gated.
 
-### 切帧没有输出
+### No frames are produced
 
-先确认 `ffmpeg -version` 可正常执行，或在配置中指定 `ffmpeg_bin`。开启
-`auto_install_ffmpeg` 时，程序会在缺少 ffmpeg 的情况下尝试安装 `imageio-ffmpeg`。
+Confirm that `ffmpeg -version` runs, or set `ffmpeg_bin` explicitly. With `auto_install_ffmpeg`
+enabled, DyFetch tries to install `imageio-ffmpeg` when ffmpeg is missing.
 
-### 界面中文显示异常
+### Chinese text renders incorrectly in the GUI
 
-界面与子进程统一使用 UTF-8。若系统区域设置较为特殊，可在启动前设置 `PYTHONUTF8=1`。
+The GUI and its subprocesses use UTF-8 throughout. If the system locale is unusual, set
+`PYTHONUTF8=1` before starting.
 
-## 项目结构
+## Project layout
 
 ```
-douyin-downloader/
-├── downloader.py          主程序，包含全部下载逻辑
-├── ui.py                  桌面图形界面
-├── cut.py                 逐帧导出工具（依赖 OpenCV，可选）
-├── cookie_extractor.py    获取登录凭据
-├── get_cookies_manual.py  手工获取凭据的辅助脚本
-├── DouYinCommand.py       旧版命令行封装，保留兼容
-├── config_simple.yml      日常使用的配置
-├── config.yml             完整配置示例
-├── config.example.yml     配置模板
-├── apiproxy/              接口封装与请求策略
-├── utils/                 日志等公共工具
-├── tests/                 回归测试脚本
-└── dy-downloader/         早期模块化实现，仅供参考
+DyFetch/
+├── downloader.py          main program, contains the download logic
+├── ui.py                  desktop GUI
+├── cut.py                 standalone frame exporter (OpenCV, optional)
+├── cookie_extractor.py    credential extraction
+├── get_cookies_manual.py  helper for manual extraction
+├── DouYinCommand.py       legacy CLI wrapper, kept for compatibility
+├── config_simple.yml      everyday configuration
+├── config.yml             full configuration example
+├── config.example.yml     configuration template
+├── apiproxy/              API wrappers and request strategies
+├── utils/                 shared helpers such as logging
+├── tests/                 regression scripts
+└── dy-downloader/         earlier modular implementation, reference only
 ```
 
-`dy-downloader/` 为早期拆分为模块的版本，功能不及当前的 `downloader.py`，依赖配置也独立，
-仅作参考保留。
+`dy-downloader/` is an earlier split-into-modules version. It has fewer features than
+`downloader.py` and its own dependency set, and is kept for reference.
 
-## 测试
+## Testing
 
-主程序的回归脚本运行于临时目录，不会影响现有数据与登录凭据：
+The regression script runs in a temporary directory and leaves existing data and credentials
+untouched:
 
 ```bash
-python tests/regress_downloader.py            # 离线校验，共 18 项
-python tests/regress_downloader.py --network  # 额外校验真实接口
+python tests/regress_downloader.py            # offline, 18 checks
+python tests/regress_downloader.py --network  # also exercises the live API
 ```
 
-覆盖链接识别、ID 提取、文件命名、时间过滤、增量下载、数据库读写、切帧与补切帧，
-以及 Cookie 自动续期。
+It covers link detection, ID extraction, file naming, date filtering, incremental downloads, database
+access, frame extraction and backfill, and cookie renewal.
 
-`dy-downloader/` 自带 pytest 用例，依赖需单独安装，且须在其目录下运行，
-否则根目录的 `utils/` 会遮蔽同名包：
+`dy-downloader/` ships its own pytest suite. Its dependencies must be installed separately, and the
+tests must be run from that directory, otherwise `utils/` in the repository root shadows the package
+of the same name:
 
 ```bash
 cd dy-downloader
@@ -284,42 +302,36 @@ pip install -r requirements.txt
 python -m pytest tests -q
 ```
 
-## 运行时生成的文件
+## Generated files
 
-以下文件在运行过程中生成，删除后会自动重建，均已列入 `.gitignore`：
+The following are created at runtime, can be deleted and regenerated, and are listed in
+`.gitignore`:
 
 ```
-cookies.txt / cookies.pkl / storage_state.json        登录态
-downloader.log / logs/ / ui_startup.log              日志
-data.db                                              增量下载数据库
-Downloaded/ / my_videos/ / my_videos_fix/            下载内容
-ui_history.json / ui_state.json / ui_run_config.yml  界面状态与设置
-.session_refresh_state.json                          自动续期尝试记录
+cookies.txt / cookies.pkl / storage_state.json        credentials
+downloader.log / logs/ / ui_startup.log               logs
+data.db                                               incremental download database
+Downloaded/ / my_videos/ / my_videos_fix/             downloaded content
+ui_history.json / ui_state.json / ui_run_config.yml   GUI state and settings
+.session_refresh_state.json                           renewal attempt record
 ```
 
-## 来源与致谢
+## Credits
 
-本项目在以下开源项目的基础上修改而来，感谢原作者的整理与分享。
+DyFetch is derived from [jiji262/douyin-downloader](https://github.com/jiji262/douyin-downloader),
+which is released under the MIT license. The `dy-downloader/` directory comes from that project's
+modular implementation, and the API wrappers under `apiproxy/` follow the layout of its earlier
+versions. `downloader.py` is a rewritten and extended version of the original download logic.
 
-### jiji262/douyin-downloader（MIT）
+That upstream also bundles an X-Bogus implementation written by Evil0ctal, found in
+`dy-downloader/utils/xbogus.py`, used under the Apache License 2.0. Its copyright header is retained
+in the file. All third-party notices are collected in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
-<https://github.com/jiji262/douyin-downloader>
+## License
 
-本项目的 `dy-downloader/` 目录取自该项目的模块化实现，目录结构与项目文档沿用上游，并补充了部分场景；
-`apiproxy/` 下的接口封装（`douyinapi`、`urls`、`result`、`database`）与 `DouYinCommand.py` 命令行入口
-沿用该项目早期版本的组织方式；`downloader.py` 是在其基础上重写的统一版本。
+MIT, see [LICENSE](LICENSE).
 
-### Evil0ctal/Douyin_TikTok_Download_API（Apache-2.0）
-
-<https://github.com/Evil0ctal/Douyin_TikTok_Download_API>
-
-`dy-downloader/utils/xbogus.py` 中的 X-Bogus 签名实现来自该项目，原始版权声明保留在文件头部。
-该文件以 Apache-2.0 授权，再分发时需一并保留其版权与许可声明。
-
-### 许可
-
-本项目采用 MIT 许可，见 [LICENSE](LICENSE)。
-
-第三方组件的版权与许可声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，
-Apache-2.0 全文见 [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt)。
-Apache-2.0 部分不要求衍生作品整体采用同一许可证，但其版权与许可声明不得移除。
+Third-party components and their license terms are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). The full Apache License 2.0 text is available in
+[licenses/Apache-2.0.txt](licenses/Apache-2.0.txt).

@@ -33,8 +33,8 @@ from urllib.parse import parse_qs, urlparse
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-APP_NAME = "抖音下载器"
-APP_SUBTITLE = "Douyin Downloader · 队列 / 批量下载 / 切帧"
+APP_NAME = "DyinDL"
+APP_SUBTITLE = "抖音下载器 · 队列 / 批量下载 / 抽帧"
 APP_VERSION = "3.2"
 
 BASE_DIR = Path(__file__).resolve().parent

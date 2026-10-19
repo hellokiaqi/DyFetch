@@ -3306,7 +3306,7 @@ class UnifiedDownloader:
     async def run(self):
         """Run downloader."""
         console.print(Panel.fit(
-            "[bold cyan]Douyin Downloader v3.0[/bold cyan]\n"
+            "[bold cyan]DyinDL v3.2[/bold cyan]\n"
             "[dim]Supports video, image, user page and mix batch download[/dim]",
             border_style="cyan"
         ))
@@ -3511,7 +3511,7 @@ async def _refresh_session_command(config_path: str) -> int:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description='Douyin downloader - unified enhanced edition',
+        description='DyinDL - Douyin content downloader',
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     

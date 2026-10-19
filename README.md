@@ -296,3 +296,27 @@ Downloaded/ / my_videos/ / my_videos_fix/            下载内容
 ui_history.json / ui_state.json / ui_run_config.yml  界面状态与设置
 .session_refresh_state.json                          自动续期尝试记录
 ```
+
+## 来源与致谢
+
+本项目在以下开源项目的基础上修改而来，感谢原作者的整理与分享。
+
+### jiji262/douyin-downloader（MIT）
+
+<https://github.com/jiji262/douyin-downloader>
+
+本项目的 `dy-downloader/` 目录取自该项目的模块化实现，目录结构与项目文档沿用上游，并补充了部分场景；
+`apiproxy/` 下的接口封装（`douyinapi`、`urls`、`result`、`database`）与 `DouYinCommand.py` 命令行入口
+沿用该项目早期版本的组织方式；`downloader.py` 是在其基础上重写的统一版本。
+
+### Evil0ctal/Douyin_TikTok_Download_API（Apache-2.0）
+
+<https://github.com/Evil0ctal/Douyin_TikTok_Download_API>
+
+`dy-downloader/utils/xbogus.py` 中的 X-Bogus 签名实现来自该项目，原始版权声明保留在文件头部。
+该文件以 Apache-2.0 授权，再分发时需一并保留其版权与许可声明。
+
+### 许可说明
+
+上游项目分别采用 MIT 与 Apache-2.0 授权。本项目在此基础上修改与再分发，需保留上述版权与许可声明。
+Apache-2.0 部分（`xbogus.py`）不要求衍生作品整体采用同一许可证，但其版权声明不得移除。

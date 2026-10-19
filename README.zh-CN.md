@@ -11,7 +11,7 @@ DyFetch（抖音下载器）用于下载抖音平台的视频、图文、作者�
 
 - 视频作品与图文作品
 - 作者主页：作品批量下载、点赞内容、合集列表
-- 主页链接携带 `modal_id` 或 `vid` 参数时，仅下载该单一作品
+- 作者主页链接，带 `vid`、`showTab`、`from_tab_name` 等参数也按整页处理
 - 合集页面与音乐页面下的作品列表
 - `v.douyin.com` 形式的短链接
 
@@ -77,7 +77,8 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/video/12345
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
 
-若主页链接携带 `modal_id` 或 `vid` 参数，则仅下载对应作品，不遍历整页。
+主页链接一律按整页处理，即使链接里带着 `vid`、`modal_id` 或浏览时自动附加的参数。
+只想下其中一条时，把 `profile_link_mode` 设为 `modal`，或直接使用 `/video/<id>` 形式的链接。
 
 下载本人主页的点赞或收藏内容：
 
@@ -168,6 +169,9 @@ thread: 5                 # 并发数
 retry_times: 3            # 重试次数
 
 cookies: auto             # auto / Cookie 字符串 / Cookie 字典
+
+profile_link_mode: all    # all = 主页链接下载整页
+                          # modal = 带 modal_id / vid 时只下一条
 
 start_time: ""            # 时间过滤，格式 YYYY-MM-DD，包含首尾两天
 end_time: ""

@@ -54,19 +54,64 @@ def load_module():
 def offline_checks(mod, workdir: Path) -> None:
     CT = mod.ContentType
 
+    def url_matrix():
+        """真实链接形态的路由矩阵：主页链接即使带 vid 也应下整页。"""
+        d = mod.UnifiedDownloader(str(workdir / "c_off.yml"))
+        CT = mod.ContentType
+        sec = "MS4wLjABAAAAeIy_ylr7h76dRXcXk4JDRFIhgWoRvOgavUTHJi3wX90"
+        cases = [
+            (f"https://www.douyin.com/user/{sec}?from_tab_name=main&vid=7678693260676523112",
+             CT.USER, sec),
+            (f"https://www.douyin.com/user/{sec}?modal_id=7678693260676523112",
+             CT.USER, sec),
+            (f"https://www.douyin.com/user/{sec}/", CT.USER, sec),
+            (f"www.douyin.com/user/{sec}", CT.USER, sec),
+            (f"https://www.iesdouyin.com/share/user/{sec}?did=1", CT.USER, sec),
+            ("https://www.douyin.com/user/self?showTab=like", CT.USER, "self"),
+            ("https://www.douyin.com/video/7678693260676523112", CT.VIDEO, "7678693260676523112"),
+            ("https://www.douyin.com/note/7678693260676523112", CT.IMAGE, "7678693260676523112"),
+            ("HTTPS://WWW.DOUYIN.COM/VIDEO/7678693260676523112", CT.VIDEO, "7678693260676523112"),
+            ("https://www.iesdouyin.com/share/video/7678693260676523112", CT.VIDEO,
+             "7678693260676523112"),
+            ("https://www.douyin.com/collection/7123456789", CT.MIX, "7123456789"),
+            ("https://www.douyin.com/mix/detail/7123456789", CT.MIX, "7123456789"),
+            ("https://www.douyin.com/music/7123456789", CT.MUSIC, "7123456789"),
+            ("https://live.douyin.com/123456", CT.LIVE, None),
+            ("https://www.douyin.com/discover?modal_id=7678693260676523112", CT.VIDEO,
+             "7678693260676523112"),
+        ]
+        for url, expect_type, expect_id in cases:
+            got_type = d.detect_content_type(url)
+            assert got_type == expect_type, f"{url} -> {got_type}, want {expect_type}"
+            if expect_id is not None:
+                got_id = d.extract_id_from_url(url)
+                assert got_id == expect_id, f"{url} -> id {got_id}, want {expect_id}"
+
+        # 显式指定视频类型时，绝不能把主页的 sec_user_id 当成作品 ID
+        assert d.extract_id_from_url(f"https://www.douyin.com/user/{sec}?vid=7678693260676523112",
+                                    CT.VIDEO) == "7678693260676523112"
+        assert d.extract_id_from_url(f"https://www.douyin.com/user/{sec}", CT.VIDEO) is None
+
+        # profile_link_mode=modal 时，带作品参数的主页链接才缩成单条
+        d.config["profile_link_mode"] = "modal"
+        assert d.detect_content_type(f"https://www.douyin.com/user/{sec}?modal_id=7678693260676523112") == CT.VIDEO
+        assert d.detect_content_type(f"https://www.douyin.com/user/{sec}?vid=7678693260676523112") == CT.VIDEO
+        assert d.detect_content_type(f"https://www.douyin.com/user/{sec}") == CT.USER
+
     def content_types():
         d = mod.UnifiedDownloader(str(workdir / "c_off.yml"))
         eq(d.detect_content_type("https://www.douyin.com/video/123"), CT.VIDEO, "video")
         eq(d.detect_content_type("https://www.douyin.com/user/MS4abc"), CT.USER, "user")
+        # 默认 profile_link_mode=all：主页链接即使带作品参数也按整页处理
         eq(
             d.detect_content_type("https://www.douyin.com/user/MS4abc?modal_id=123"),
-            CT.VIDEO,
-            "user-modal",
+            CT.USER,
+            "user-modal defaults to profile",
         )
         eq(
             d.detect_content_type("https://www.douyin.com/user/self?modal_id=123&showTab=like"),
-            CT.VIDEO,
-            "self-modal",
+            CT.USER,
+            "self-modal defaults to profile",
         )
         eq(d.detect_content_type("https://www.douyin.com/collection/7123"), CT.MIX, "collection")
         eq(d.detect_content_type("https://www.douyin.com/mix/7123"), CT.MIX, "mix")
@@ -79,10 +124,18 @@ def offline_checks(mod, workdir: Path) -> None:
         eq(d.extract_id_from_url("https://www.douyin.com/video/123456"), "123456", "video id")
         eq(d.extract_id_from_url("https://www.douyin.com/note/999"), "999", "note id")
         eq(d.extract_id_from_url("https://www.douyin.com/user/MS4xyz"), "MS4xyz", "user id")
+        # 默认按整页处理：主页链接里的 modal_id 不改变取到的 ID
+        eq(
+            d.extract_id_from_url("https://www.douyin.com/user/MS4xyz?modal_id=42"),
+            "MS4xyz",
+            "profile id wins by default",
+        )
+        # 切到 modal 模式后才缩成单条
+        d.config["profile_link_mode"] = "modal"
         eq(
             d.extract_id_from_url("https://www.douyin.com/user/MS4xyz?modal_id=42"),
             "42",
-            "modal id wins",
+            "modal id wins in modal mode",
         )
         eq(d.extract_id_from_url("https://no-id-here/"), None, "no id")
 
@@ -305,6 +358,7 @@ def offline_checks(mod, workdir: Path) -> None:
 
     for name, fn in [
         ("content type routing", content_types),
+        ("url routing matrix", url_matrix),
         ("id extraction", extract_ids),
         ("safe file names", safe_names),
         ("post folder naming", folder_names),

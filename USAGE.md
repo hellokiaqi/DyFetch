@@ -48,12 +48,17 @@ python downloader.py -c config_simple.yml -u "https://www.douyin.com/video/12345
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/note/1234567890123456789"
 ```
 
-### 主页链接中只下载某一个作品
+### 主页链接的处理方式
 
-链接里带 `modal_id` / `vid` 时，只会下载该作品：
+主页链接一律按整页下载，链接里带的 `vid`、`modal_id`、`showTab`、`from_tab_name` 等参数不影响判定。
+只下其中一条时，有两种做法：
+
+1. 直接用作品链接：`https://www.douyin.com/video/<作品ID>`
+2. 或在配置里设置 `profile_link_mode: modal`，此时带 `modal_id` / `aweme_id` / `vid` 的主页链接
+   会缩成单条：
 
 ```bash
-python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAAeEVIdxtFC-y5UG_8coku6gHwWJ4itLMnGtYNULV4VZ8?from_tab_name=main&modal_id=7628190562495340004&vid=7628190562495340004"
+python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAAeEVIdxtFC-y5UG_8coku6gHwWJ4itLMnGtYNULV4VZ8?modal_id=7628190562495340004"
 ```
 
 ### 我的主页（点赞 / 收藏）

@@ -56,6 +56,11 @@ cookies: auto
 #   odin_tt: YOUR_ODIN_TT
 #   passport_csrf_token: YOUR_PASSPORT_CSRF_TOKEN
 #   sid_guard: YOUR_SID_GUARD
+# 主页链接的处理方式：
+#   all   = 主页链接始终下载整页作品（默认，链接带 vid / modal_id 也不影响）
+#   modal = 主页链接带 modal_id / aweme_id / vid 时只下载该单一作品
+profile_link_mode: all
+
 # 浏览器兜底：接口返回不全时用 Playwright 补齐
 user_posts_browser_recovery: true
 user_posts_browser_headless: false

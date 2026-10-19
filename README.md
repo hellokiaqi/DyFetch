@@ -12,7 +12,7 @@ The main program is `downloader.py`; the GUI is `ui.py`.
 
 - Single video and image posts
 - User profiles: all posts, liked posts, collections
-- Profile links carrying `modal_id` or `vid` are treated as a single post
+- User profile links, including those carrying `vid`, `showTab` or `from_tab_name`
 - Collection pages and music pages
 - Short links of the form `v.douyin.com/...`
 
@@ -82,7 +82,9 @@ Download every post on a profile:
 python downloader.py -c config_simple.yml -u "https://www.douyin.com/user/MS4wLjABAAAA..."
 ```
 
-If the profile link carries `modal_id` or `vid`, only that post is downloaded.
+A profile link is always treated as a profile, even when the site appends `vid`,
+`modal_id` or other parameters while you browse. To download a single post instead, set
+`profile_link_mode: modal`, or use a direct `/video/<id>` link.
 
 Download your own liked or collected posts:
 
@@ -172,6 +174,9 @@ thread: 5                 # concurrency
 retry_times: 3            # retry count
 
 cookies: auto             # auto / cookie string / cookie mapping
+
+profile_link_mode: all    # all = a profile link downloads every post
+                          # modal = narrow to one post when modal_id / vid is present
 
 start_time: ""            # date filter, YYYY-MM-DD, both ends inclusive
 end_time: ""

@@ -50,3 +50,8 @@ user_posts_browser_headless: false
 # 公开作品即使未登录也能下载，开启后更稳；关闭则只走接口。
 single_aweme_browser_recovery: true
 single_aweme_browser_headless: true
+
+# 主页链接的处理方式：
+#   all   = 主页链接始终下载整页作品（默认，链接带 vid / modal_id 也不影响）
+#   modal = 主页链接带 modal_id / aweme_id / vid 时只下载该单一作品
+profile_link_mode: all

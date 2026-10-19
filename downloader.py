@@ -22,7 +22,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
-from urllib.parse import urlparse, quote
+from urllib.parse import urlparse, parse_qs, quote
 import argparse
 import importlib
 import yaml
@@ -1279,23 +1279,83 @@ class UnifiedDownloader:
                 logger.warning(f"Auto cookie fetch failed: {e}")
                 console.print("[yellow]Auto cookie fetch failed, continue without cookie[/yellow]")
 
+    # 主页链接的判定方式：all = 始终下载整页；modal = 带作品参数时缩为单条
+    PROFILE_LINK_MODES = ('all', 'modal')
+
+    @staticmethod
+    def _normalize_url(url: str) -> Tuple[str, str, Dict[str, str]]:
+        """把各种写法的链接规整为 (host, path, query)，缺少协议头也能处理。"""
+        text = str(url or '').strip()
+        if not text:
+            return '', '/', {}
+        if text.startswith('//'):
+            text = 'https:' + text
+        elif not re.match(r'^[a-zA-Z][a-zA-Z0-9+.\-]*://', text):
+            text = 'https://' + text
+        parsed = urlparse(text)
+        host = (parsed.netloc or '').lower()
+        path = re.sub(r'/{2,}', '/', parsed.path or '/')
+        path = path.rstrip('/') or '/'
+        query = {key: values[0] for key, values in parse_qs(parsed.query or '').items() if values}
+        return host, path, query
+
+    @staticmethod
+    def _query_aweme_id(query: Dict[str, str]) -> Optional[str]:
+        """从查询参数里取出作品 ID（modal_id / aweme_id / item_id / vid）。"""
+        for key in ('modal_id', 'aweme_id', 'item_id', 'vid'):
+            value = str(query.get(key) or '').strip()
+            if value.isdigit():
+                return value
+        return None
+
+    def _profile_link_mode(self) -> str:
+        """主页链接的处理方式，来自配置项 profile_link_mode，非法值退回 all。"""
+        mode = str(self.config.get('profile_link_mode') or 'all').strip().lower()
+        return mode if mode in self.PROFILE_LINK_MODES else 'all'
+
+    def _classify_url(self, url: str) -> Tuple[str, Optional[str]]:
+        """按「路径优先」的顺序判定链接类型，并返回对应的 ID。
+
+        路径比查询参数可靠：主页链接上常带有 vid、showTab、from_tab_name 等参数，
+        只看参数会把主页误判成单个作品，所以这里先看路径，再决定是否缩成单条。
+        """
+        host, path, query = self._normalize_url(url)
+
+        if 'live.douyin.com' in host or path.startswith('/live'):
+            return ContentType.LIVE, None
+
+        match = re.search(r'/(?:share/)?video/(\d+)', path, re.I)
+        if match:
+            return ContentType.VIDEO, match.group(1)
+        match = re.search(r'/(?:share/)?note/(\d+)', path, re.I)
+        if match:
+            return ContentType.IMAGE, match.group(1)
+
+        match = re.search(r'/(?:share/)?user/([A-Za-z0-9_.\-]+)', path, re.I)
+        if match:
+            user_id = match.group(1)
+            if self._profile_link_mode() == 'modal':
+                aweme_id = self._query_aweme_id(query)
+                if aweme_id:
+                    return ContentType.VIDEO, aweme_id
+            return ContentType.USER, user_id
+
+        match = re.search(r'/(?:collection|mix/detail|mix)/(\d+)', path, re.I)
+        if match:
+            return ContentType.MIX, match.group(1)
+        match = re.search(r'/music/(\d+)', path, re.I)
+        if match:
+            return ContentType.MUSIC, match.group(1)
+
+        # 没有可识别的路径时，退回查询参数里的作品 ID
+        aweme_id = self._query_aweme_id(query)
+        if aweme_id:
+            return ContentType.VIDEO, aweme_id
+        return ContentType.VIDEO, None
+
     def detect_content_type(self, url: str) -> ContentType:
         """根据链接判断内容类型（视频 / 图文 / 主页 / 合集 / 音乐 / 直播）"""
-        # 图文作品链接形如 /note/<id>，需先于单作品标记判断，否则会被识别成视频
-        if '/note/' in url:
-            return ContentType.IMAGE
-        if self._url_has_single_aweme_marker(url):
-            return ContentType.VIDEO
-        elif '/user/' in url:
-            return ContentType.USER
-        elif '/collection/' in url or '/mix/' in url:
-            return ContentType.MIX
-        elif '/music/' in url:
-            return ContentType.MUSIC
-        elif 'live.douyin.com' in url:
-            return ContentType.LIVE
-        else:
-            return ContentType.VIDEO  # 默认按视频作品处理
+        return self._classify_url(url)[0]
     
     async def resolve_short_url(self, url: str) -> str:
         """解析 v.douyin.com 短链接，返回真实地址"""
@@ -1311,86 +1371,68 @@ class UnifiedDownloader:
         return url
 
     def _url_has_single_aweme_marker(self, url: str) -> bool:
-        """Whether the URL clearly points to a single aweme page/modal."""
-        single_aweme_patterns = (
-            r'/video/\d+',
-            r'/note/\d+',
-            r'(^|[?&])modal_id=\d+',
-            r'(^|[?&])aweme_id=\d+',
-            r'(^|[?&])item_id=\d+',
-        )
-        return any(re.search(pattern, url) for pattern in single_aweme_patterns)
+        """链接是否明确指向单个作品（作品路径，或带作品 ID 参数）。"""
+        _, path, query = self._normalize_url(url)
+        if re.search(r'/(?:share/)?(?:video|note)/\d+', path, re.I):
+            return True
+        return self._query_aweme_id(query) is not None
     
     def extract_id_from_url(self, url: str, content_type: ContentType = None) -> Optional[str]:
-        """从链接中提取 ID
-        
+        """从链接中提取 ID。
+
         Args:
             url: 作品或主页链接
-            content_type: 内容类型，留空时自动判断
+            content_type: 期望的类型，留空时按链接自动判断
         """
-        # 主页链接优先提取 sec_user_id
-        if content_type == ContentType.USER:
-            user_patterns = [
-                r'/user/([\w.-]+)',
-                r'sec_uid=([\w.-]+)'
-            ]
-            
-            for pattern in user_patterns:
-                match = re.search(pattern, url)
-                if match:
-                    user_id = match.group(1)
-                    logger.info(f"提取到用户ID: {user_id}")
-                    return user_id
+        if not str(url or '').strip():
+            return None
 
-        # 作品 ID 的常见参数形式
-        video_patterns = [
-            r'/video/(\d+)',
-            r'/note/(\d+)',
-            r'modal_id=(\d+)',
-            r'aweme_id=(\d+)',
-            r'item_id=(\d+)'
-        ]
-        
-        for pattern in video_patterns:
-            match = re.search(pattern, url)
-            if match:
-                video_id = match.group(1)
-                logger.info(f"提取到作品ID: {video_id}")
-                return video_id
+        detected, detected_id = self._classify_url(url)
+        wanted = content_type or detected
 
-        if content_type is None and '/user/' in url:
-            user_patterns = [
-                r'/user/([\w.-]+)',
-                r'sec_uid=([\w.-]+)'
-            ]
-            
-            for pattern in user_patterns:
-                match = re.search(pattern, url)
-                if match:
-                    user_id = match.group(1)
-                    logger.info(f"提取到用户ID: {user_id}")
-                    return user_id
-        
-        # 兜底匹配
-        other_patterns = [
-            r'/collection/(\d+)',
-            r'/music/(\d+)'
-        ]
-        
-        for pattern in other_patterns:
-            match = re.search(pattern, url)
+        if wanted == detected and detected_id:
+            return self._log_extracted_id(detected, detected_id)
+
+        _, path, query = self._normalize_url(url)
+
+        # 调用方明确要求作品 ID 时，只取作品 ID，避免把主页的 sec_user_id 当成作品 ID
+        if wanted in (ContentType.VIDEO, ContentType.IMAGE):
+            aweme_id = self._query_aweme_id(query)
+            if aweme_id:
+                return self._log_extracted_id(ContentType.VIDEO, aweme_id)
+            match = re.search(r'/(?:share/)?(?:video|note)/(\d+)', path, re.I)
             if match:
-                return match.group(1)
-        
-        # 无法从链接中识别出 ID
-        number_match = re.search(r'(\d{15,20})', url)
-        if number_match:
-            video_id = number_match.group(1)
-            logger.info(f"从URL中提取到数字ID: {video_id}")
-            return video_id
-        
+                return self._log_extracted_id(ContentType.VIDEO, match.group(1))
+            logger.error(f"无法从URL提取作品ID: {url}")
+            return None
+
+        if wanted == ContentType.USER:
+            match = re.search(r'/(?:share/)?user/([A-Za-z0-9_.\-]+)', path, re.I)
+            if match:
+                return self._log_extracted_id(ContentType.USER, match.group(1))
+            sec_uid = str(query.get('sec_uid') or query.get('sec_user_id') or '').strip()
+            if sec_uid:
+                return self._log_extracted_id(ContentType.USER, sec_uid)
+            logger.error(f"无法从URL提取用户ID: {url}")
+            return None
+
+        if detected_id:
+            return self._log_extracted_id(detected, detected_id)
+
+        # 最后兜底：路径或查询里直接写着一段作品 ID
+        match = re.search(r'(?<!\d)(\d{15,20})(?!\d)', str(url))
+        if match:
+            logger.warning(f"从URL中按数字兜底提取到ID: {match.group(1)}")
+            return match.group(1)
+
         logger.error(f"无法从URL提取ID: {url}")
         return None
+
+    @staticmethod
+    def _log_extracted_id(content_type: ContentType, value: str) -> str:
+        label = '用户ID' if content_type == ContentType.USER else '作品ID'
+        logger.info(f"提取到{label}: {value}")
+        return value
 
     def _get_aweme_id_from_info(self, info: Dict) -> Optional[str]:
         """从 aweme 数据中取出 aweme_id"""
@@ -2516,6 +2558,17 @@ class UnifiedDownloader:
             user_id = self.extract_id_from_url(url, ContentType.USER)
             if not user_id:
                 logger.error(f"无法从URL提取用户ID: {url}")
+                console.print(
+                    "[red]无法识别该链接对应的作者，请确认是主页链接"
+                    "（形如 https://www.douyin.com/user/MS4wLjABAAAA...）[/red]"
+                )
+                return False
+            if user_id.lower() == 'self':
+                logger.error("user/self 链接需要有效登录态才能解析出具体作者")
+                console.print(
+                    "[red]这是「我的主页」形式的链接，需要有效登录态才能确定作者身份。\n"
+                    "请先运行 python cookie_extractor.py 登录，或改用带 sec_user_id 的主页链接。[/red]"
+                )
                 return False
             
             console.print(f"\n[cyan]Fetching post list for user {user_id}...[/cyan]")

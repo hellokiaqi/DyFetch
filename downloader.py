@@ -778,12 +778,21 @@ class UnifiedDownloader:
         return '登录后查看更多作品' in body_text or '立即登录' in body_text
 
     async def _capture_browser_profile_links(self, page) -> Dict[str, str]:
-        """Collect visible profile work links from the browser DOM."""
+        """Collect visible profile work links from the browser DOM.
+
+        只取正文区域的链接：页脚和导航栏里同样有 /video/ 链接（推荐位），
+        不加过滤会把其他作者的作品一起收进来。
+        """
         try:
             hrefs = await page.evaluate("""
                 () => Array.from(
                     document.querySelectorAll('a[href*="/video/"], a[href*="/note/"]')
-                ).map((node) => node.href).filter(Boolean)
+                )
+                .filter((node) => !node.closest(
+                    'footer, [page-footer], [data-e2e="page-footer"], [data-e2e="douyin-navigation"]'
+                ))
+                .map((node) => node.href)
+                .filter(Boolean)
             """)
         except Exception:
             return {}
@@ -855,8 +864,14 @@ class UnifiedDownloader:
                     return
                 for aweme in aweme_list:
                     aweme_id = self._get_aweme_id_from_info(aweme)
-                    if aweme_id:
-                        collected_awemes[aweme_id] = aweme
+                    if not aweme_id:
+                        continue
+                    # 主页接口理论上只返回该作者的作品，这里仍按作者校验，
+                    # 避免推荐流之类的数据混进来
+                    author_sec = self._get_sec_uid_from_info(aweme)
+                    if author_sec and author_sec != user_id:
+                        continue
+                    collected_awemes[aweme_id] = aweme
 
             page.on('response', on_response)
 
@@ -1147,6 +1162,13 @@ class UnifiedDownloader:
 
                 detail_id = self._get_aweme_id_from_info(detail or {}) or aweme_id
                 if not detail or detail_id in existing_ids or detail_id in recovered_ids:
+                    continue
+                # 链接来自页面，可能是推荐位或转发，按作者校验后再收
+                author_sec = self._get_sec_uid_from_info(detail)
+                if author_sec and author_sec != user_id:
+                    logger.info(
+                        "跳过不属于该主页的作品 %s（实际作者 %s）", aweme_id, author_sec
+                    )
                     continue
                 recovered_awemes.append(detail)
                 recovered_ids.add(detail_id)

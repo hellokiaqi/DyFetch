@@ -8,6 +8,9 @@ Downloaded/
 my_videos/
 my_videos_fix/
 ui_history.json
+ui_state.json
+ui_run_config.yml
+.session_refresh_state.json
 storage_state.json
 cookies.txt
 cookies.pkl
@@ -19,3 +22,6 @@ config.local.yml
 config.private.yml
 config_legacy.private.yml
 *.swp
+.pytest_cache/
+.venv/
+venv/

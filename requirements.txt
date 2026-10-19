@@ -1,27 +1,21 @@
-# Core dependencies
-requests==2.31.0          # HTTP 请求库
-pyyaml==6.0.1            # YAML 配置支持
-rich==13.7.0             # 终端美化
-imageio-ffmpeg>=0.5.1    # ffmpeg runtime for clip frame extraction
+# 运行必需依赖（downloader.py 主程序）
+requests>=2.31.0          # HTTP 请求
+PyYAML>=6.0.1             # YAML 配置
+rich>=13.7.0              # 终端输出美化
+aiohttp>=3.8.0            # 异步 HTTP
+imageio-ffmpeg>=0.5.1     # 内置 ffmpeg，用于视频切帧
+python-dateutil>=2.8.2    # 时间解析
+requests-toolbelt>=1.0.0  # 请求辅助
+brotli>=1.1.0             # 解码 brotli 压缩响应（缺少时会提示）
 
+# 浏览器兜底 / 自动获取 Cookie（可选，建议安装）
+# 安装后还需执行：playwright install chromium
+# playwright>=1.40.0
 
-# Async support (optional)
-aiohttp>=3.8.0           # 异步 HTTP
+# 独立抽帧工具 cut.py 所需（可选）
+# opencv-python>=4.8.0
+# tqdm>=4.66.0
 
-# Logging
-python-json-logger==2.0.7 # JSON 格式日志
-
-# Development
-pytest==7.4.3            # 单元测试
-black==23.11.0           # 代码格式化
-
-# 重试机制（目前已注释相关代码，可选）
-# tenacity>=8.2.3
-
-# 测试相关（可选）
-# pytest>=7.4.4
-# pytest-asyncio>=0.23.3
-
-# 其他可能需要的包
-python-dateutil>=2.8.2
-requests-toolbelt>=1.0.0
+# 开发与测试（可选）
+# pytest>=7.4.3
+# black>=23.11.0

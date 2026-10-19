@@ -1,62 +1,67 @@
 #######################################
-# downloader.py ???????????
+# downloader.py 默认配置文件（简洁版）
 #######################################
 
-# ??????????
+# 下载链接（支持多个）
 link:
   - https://www.douyin.com/user/SEC_USER_ID
   # - https://www.douyin.com/video/1234567890123456789
   # - https://www.douyin.com/user/SEC_USER_ID?from_tab_name=main&modal_id=1234567890123456789&vid=1234567890123456789
   # - https://www.douyin.com/user/self?from_tab_name=main&modal_id=1234567890123456789&showTab=like
 
-# ????
+# 保存路径
 path: ./Downloaded/
 
-# ????
-music: true
-cover: true
-avatar: false
-json: true
+# 下载内容开关
+music: true      # 背景音乐
+cover: true      # 作品封面
+avatar: false    # 作者头像
+json: true       # 原始元数据
 
-# ????
+# 视频切帧
 slice_videos: true
-slice_fps: 10
-slice_subdir: frames
-slice_backfill_on_run: false
-auto_install_ffmpeg: true
-# ffmpeg_bin: ffmpeg
+slice_fps: 10                  # 每秒抽帧数
+slice_subdir: frames           # 帧保存子目录名
+slice_backfill_on_run: false   # 运行前为旧目录补切帧
+auto_install_ffmpeg: true      # 缺少 ffmpeg 时尝试自动安装
+# ffmpeg_bin: ffmpeg           # 手动指定 ffmpeg 可执行文件
 
-# ?????????? YYYY-MM-DD?
+# 时间过滤（留空表示不过滤），格式 YYYY-MM-DD
 start_time: ""
 end_time: ""
 
-# ????????
+# 主页下载模式：post（作品）/ like（点赞）/ mix（合集）
 mode:
   - post
   # - like
 
-# ???????0=???
+# 数量限制，0 表示不限制
 number:
   post: 0
   like: 0
 
-# ????
+# 并发与重试
 thread: 5
 retry_times: 3
 
-# Cookie ????????? cookie_extractor.py ???????
+# Cookie：auto 表示自动读取 cookies.txt / cookies.pkl，缺失时用 Playwright 获取
+# 可先运行 cookie_extractor.py 生成 Cookie 文件
 cookies: auto
-# ??????? Cookie?
+# 也可以直接填写 Cookie 字符串：
 # cookies: "msToken=YOUR_MS_TOKEN; ttwid=YOUR_TTWID; odin_tt=YOUR_ODIN_TT; ..."
-# ???????
+# 或者填写 Cookie 字典：
 # cookies:
 #   msToken: YOUR_MS_TOKEN
 #   ttwid: YOUR_TTWID
 #   odin_tt: YOUR_ODIN_TT
 #   passport_csrf_token: YOUR_PASSPORT_CSRF_TOKEN
 #   sid_guard: YOUR_SID_GUARD
-
-# ???????????????
+# 浏览器兜底：接口返回不全时用 Playwright 补齐
 user_posts_browser_recovery: true
 user_posts_browser_headless: false
 # playwright_storage_state: storage_state.json
+
+# 单作品兜底：接口返回空（常见于登录态过期）时，用浏览器打开作品页取数据。
+# 公开作品即使未登录也能下载，开启后更稳；关闭则只走接口。
+single_aweme_browser_recovery: true
+single_aweme_browser_headless: true

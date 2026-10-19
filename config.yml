@@ -1,5 +1,5 @@
 #######################################
-# DouYinCommand.py ???????????
+# DouYinCommand.py / downloader.py 完整配置样例
 #######################################
 
 link:
@@ -36,8 +36,16 @@ folderstyle: true
 start_time: ''
 end_time: ''
 
-# ????
-# 1) ??? cookies ??
+# 视频切帧（可选）
+# slice_videos: true
+# slice_fps: 10
+# slice_subdir: frames
+# slice_backfill_on_run: false
+# auto_install_ffmpeg: true
+# ffmpeg_bin: ffmpeg
+
+# Cookie 两种写法
+# 1) 使用 Cookie 字典
 cookies:
   msToken: YOUR_MS_TOKEN
   ttwid: YOUR_TTWID
@@ -45,5 +53,5 @@ cookies:
   passport_csrf_token: YOUR_PASSPORT_CSRF_TOKEN
   sid_guard: YOUR_SID_GUARD
 
-# 2) ?????? Cookie???????
+# 2) 使用 Cookie 字符串（与字典二选一）
 # cookie: "msToken=YOUR_MS_TOKEN; ttwid=YOUR_TTWID; odin_tt=YOUR_ODIN_TT; ..."

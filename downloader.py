@@ -1,9 +1,9 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 """
-閹舵牠鐓舵稉瀣祰閸?- 缂佺喍绔存晶鐐插繁閻?
-閺€顖涘瘮鐟欏棝顣堕妴浣告禈閺傚洢鈧胶鏁ら幋铚傚瘜妞ょ偣鈧礁鎮庨梿鍡欑搼婢舵氨顫掗崘鍛啇閻ㄥ嫭澹掗柌蹇庣瑓鏉?
+抖音下载器 - 统一增强版
+支持视频、图文、作者主页、合集等多种链接的批量下载
 """
 
 import asyncio
@@ -32,7 +32,7 @@ if hasattr(sys.stdout, 'reconfigure'):
 if hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 
-# 缁楊兛绗侀弬鐟扮氨
+# 第三方库
 try:
     import aiohttp
     import requests
@@ -43,13 +43,13 @@ try:
     from rich.live import Live
     from rich import print as rprint
 except ImportError as e:
-    print(f"鐠囧嘲鐣ㄧ憗鍛箑鐟曚胶娈戞笟婵婄: pip install aiohttp requests rich pyyaml")
+    print(f"请安装必要的依赖: pip install aiohttp requests rich pyyaml")
     sys.exit(1)
 
-# 濞ｈ濮炴い鍦窗鐠侯垰绶?
+# 本地模块
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# 鐎电厧鍙嗘い鍦窗濡€虫健
+# 项目内部模块
 from apiproxy.douyin import douyin_headers
 from apiproxy.douyin.urls import Urls
 from apiproxy.douyin.result import Result
@@ -57,7 +57,7 @@ from apiproxy.common.utils import Utils
 from apiproxy.douyin.auth.cookie_manager import AutoCookieManager
 from apiproxy.douyin.database import DataBase
 
-# 闁板秶鐤嗛弮銉ョ箶
+# 配置日志
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -73,7 +73,7 @@ console = Console()
 
 
 class ContentType:
-    """閸愬懎顔愮猾璇茬€烽弸姘"""
+    """内容类型枚举"""
     VIDEO = "video"
     IMAGE = "image" 
     USER = "user"
@@ -83,7 +83,7 @@ class ContentType:
 
 
 class DownloadStats:
-    """娑撳娴囩紒鐔活吀"""
+    """下载统计"""
     def __init__(self):
         self.total = 0
         self.success = 0
@@ -93,7 +93,10 @@ class DownloadStats:
     
     @property
     def success_rate(self):
-        return (self.success / self.total * 100) if self.total > 0 else 0
+        # 主页不限数量时 total 只是预估值，可能远小于实际下载数，
+        # 这里以「实际处理过的条数」为分母，保证成功率不会出现 2400% 这种值
+        processed = max(self.total, self.success + self.failed + self.skipped)
+        return (self.success / processed * 100) if processed > 0 else 0
     
     @property
     def elapsed_time(self):
@@ -111,14 +114,14 @@ class DownloadStats:
 
 
 class RateLimiter:
-    """闁喓宸奸梽鎰煑閸?"""
+    """速率限制器"""
     def __init__(self, max_per_second: float = 2):
         self.max_per_second = max_per_second
         self.min_interval = 1.0 / max_per_second
         self.last_request = 0
     
     async def acquire(self):
-        """閼惧嘲褰囩拋绋垮讲"""
+        """获取一个执行许可（按配置速率等待）"""
         current = time.time()
         time_since_last = current - self.last_request
         if time_since_last < self.min_interval:
@@ -127,13 +130,13 @@ class RateLimiter:
 
 
 class RetryManager:
-    """闁插秷鐦粻锛勬倞閸?"""
+    """重试管理器"""
     def __init__(self, max_retries: int = 3):
         self.max_retries = max_retries
-        self.retry_delays = [1, 2, 5]  # 闁插秷鐦鎯扮箿
+        self.retry_delays = [1, 2, 5]  # 重试间隔（秒）
     
     async def execute_with_retry(self, func, *args, **kwargs):
-        """閹笛嗩攽閸戣姤鏆熼獮鎯板殰閸斻劑鍣哥拠?"""
+        """执行函数，失败时自动重试"""
         last_error = None
         for attempt in range(self.max_retries):
             try:
@@ -142,13 +145,13 @@ class RetryManager:
                 last_error = e
                 if attempt < self.max_retries - 1:
                     delay = self.retry_delays[min(attempt, len(self.retry_delays) - 1)]
-                    logger.warning(f"缁?{attempt + 1} 濞嗏€崇毦鐠囨洖銇戠拹? {e}, {delay}缁夋帒鎮楅柌宥堢槸...")
+                    logger.warning(f"第 {attempt + 1} 次尝试失败: {e}, {delay} 秒后重试...")
                     await asyncio.sleep(delay)
         raise last_error
 
 
 class UnifiedDownloader:
-    """缂佺喍绔存稉瀣祰閸?"""
+    """统一下载器"""
     
     def __init__(self, config_path: str = "config.yml"):
         self.config_path = config_path
@@ -157,23 +160,23 @@ class UnifiedDownloader:
         self.result_helper = Result()
         self.utils = Utils()
         
-        # 缂佸嫪娆㈤崚婵嗩潗閸?
+        # 统计信息
         self.stats = DownloadStats()
         self.rate_limiter = RateLimiter(max_per_second=2)
         self.retry_manager = RetryManager(max_retries=self.config.get('retry_times', 3))
         
-        # Cookie娑撳氦顕Ч鍌氥仈閿涘牆娆㈡潻鐔峰灥婵瀵查敍灞炬暜閹镐浇鍤滈崝銊ㄥ箯閸欐牭绱?
+        # Cookie 初始化（支持自动获取与本地文件回退）
         self.cookies = self.config.get('cookies') if 'cookies' in self.config else self.config.get('cookie')
         self.auto_cookie = bool(self.config.get('auto_cookie')) or (isinstance(self.config.get('cookie'), str) and self.config.get('cookie') == 'auto') or (isinstance(self.config.get('cookies'), str) and self.config.get('cookies') == 'auto')
         self.headers = {**douyin_headers}
-        # 闁灝鍘ら張宥呭缁旑垯濞囬悽鈺瀝otli鐎佃壈鍤iohttp閺冪姵纭剁憴锝呭竾閿涘牊婀€瑰顥奲rotli鎼存挻妞傛导姘毉閻滄壆鈹栭崫宥呯安閿?
+        # 禁用 brotli 压缩：为兼容 aiohttp，请求头不声明 br
         self.headers['accept-encoding'] = 'gzip, deflate'
-        # 婢х偤鍣烘稉瀣祰娑撳孩鏆熼幑顔肩氨
+        # 增量下载与数据库
         self.increase_cfg: Dict[str, Any] = self.config.get('increase', {}) or {}
         self.enable_database: bool = bool(self.config.get('database', True))
         self.db: Optional[DataBase] = DataBase() if self.enable_database else None
         
-        # 娣囨繂鐡ㄧ捄顖氱窞
+        # 保存路径
         self.save_path = Path(self.config.get('path', './Downloaded'))
         self.save_path.mkdir(parents=True, exist_ok=True)
         
@@ -196,23 +199,27 @@ class UnifiedDownloader:
         self.auto_install_playwright = bool(self.config.get('auto_install_playwright', True))
         self._ffmpeg_checked = False
         self._ffmpeg_path: Optional[str] = None
+        self._cookies_expired = False
+        self._last_cookie_write = 0.0
+        self._cookie_write_pending = False
+        self.login_expiry_at: Optional[float] = None
         self._imageio_ffmpeg_checked = False
         
     def _load_config(self, config_path: str) -> Dict:
-        """閸旂姾娴囬柊宥囩枂閺傚洣娆?"""
+        """加载配置文件"""
         if not os.path.exists(config_path):
-            # 閸忕厧顔愰柊宥囩枂閺傚洣娆㈤崨钘夋倳閿涙矮绱崗?config.yml閿涘苯鍙惧▎?config_simple.yml
+            # 配置文件缺失时回退到 config.yml / config_simple.yml
             alt_path = 'config_simple.yml'
             if os.path.exists(alt_path):
                 config_path = alt_path
             else:
-                # 鏉╂柨娲栨稉鈧稉顏嗏敄闁板秶鐤嗛敍宀€鏁遍崨鎴掓姢鐞涘苯寮弫鏉垮枀鐎?
+                # 两者都不存在时返回空字典，由调用方使用默认值
                 return {}
         
         with open(config_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
         
-        # 缁犫偓閸栨牠鍘ょ純顔煎悑鐎圭櫢绱發inks/link, output_dir/path, cookie/cookies
+        # 兼容旧键名：links/link、output_dir/path、cookie/cookies
         if 'links' in config and 'link' not in config:
             config['link'] = config['links']
         if 'output_dir' in config and 'path' not in config:
@@ -222,8 +229,8 @@ class UnifiedDownloader:
         if isinstance(config.get('cookies'), str) and config.get('cookies') == 'auto':
             config['auto_cookie'] = True
         
-        # 閸忎浇顔忛弮?link閿涘牓鈧俺绻冮崨鎴掓姢鐞涘奔绱堕崗銉礆
-        # 婵″倹鐏夋稉銈堚偓鍛村厴濞屸剝婀侀敍灞芥倵缂侇厺绱伴崷銊ㄧ箥鐞涘本妞傞幓鎰仛
+        # 链接只支持列表形式，字符串会在 run() 中统一转换
+        # 若两者都没有，后续会在运行时提示
         
         return config
     
@@ -295,6 +302,214 @@ class UnifiedDownloader:
         """Build Cookie header string."""
         cookie_map = self._cookies_to_dict(self.cookies)
         return '; '.join([f'{k}={v}' for k, v in cookie_map.items() if k and v is not None])
+
+    @staticmethod
+    def _cookie_expiry_at(cookie_map: Dict[str, str]) -> Optional[float]:
+        """从 sid_guard 解析登录态到期时间戳（无法解析返回 None）。
+
+        sid_guard 的格式为 <sessionid>|<签发时间戳>|<有效期秒数>|<其他>。
+        """
+        raw = (cookie_map or {}).get('sid_guard') or ''
+        if not raw:
+            return None
+        try:
+            from urllib.parse import unquote
+            parts = unquote(str(raw)).split('|')
+            if len(parts) < 3:
+                return None
+            return float(int(parts[1]) + int(parts[2]))
+        except Exception:
+            return None
+
+    @classmethod
+    def _cookie_expiry_hint(cls, cookie_map: Dict[str, str]) -> Optional[str]:
+        """登录态已过期时返回中文提示，未过期返回 None。"""
+        expire_at = cls._cookie_expiry_at(cookie_map)
+        if expire_at is None or expire_at > time.time():
+            return None
+        expired = datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d %H:%M')
+        return f"Cookie 登录状态已于 {expired} 过期，请重新运行 cookie_extractor.py 登录"
+
+    # ---------------------------------------------------------------- Cookie 自动续期
+
+    AUTO_REFRESH_COOLDOWN_HOURS = 6.0
+    AUTO_REFRESH_STATE = '.session_refresh_state.json'
+
+    def _skip_auto_refresh_reason(self) -> Optional[float]:
+        """若最近一次自动刷新失败且在冷却期内，返回已过去的小时数。"""
+        try:
+            path = Path(self.AUTO_REFRESH_STATE)
+            if not path.exists():
+                return None
+            data = json.loads(path.read_text(encoding='utf-8')) or {}
+            if data.get('success'):
+                return None
+            elapsed = (time.time() - float(data.get('at') or 0)) / 3600.0
+            if 0 <= elapsed < self.AUTO_REFRESH_COOLDOWN_HOURS:
+                return elapsed
+        except Exception:
+            return None
+        return None
+
+    def _remember_auto_refresh(self, success: bool) -> None:
+        try:
+            Path(self.AUTO_REFRESH_STATE).write_text(
+                json.dumps({'at': time.time(), 'success': bool(success)}), encoding='utf-8'
+            )
+        except Exception:
+            pass
+
+
+    def _cookie_persist_paths(self) -> Dict[str, Path]:
+        return {
+            'txt': Path('cookies.txt'),
+            'pkl': Path('cookies.pkl'),
+            'state': Path('storage_state.json'),
+        }
+
+    def _absorb_response_cookies(self, response) -> None:
+        """把服务端 Set-Cookie 合并进本地 Cookie，实现登录态自动续期。
+
+        抖音在登录有效期内会在响应里滚动下发新的 sessionid / sid_guard，
+        以前这些 Cookie 被直接丢弃，导致会话到期后只能重新扫码登录。
+        """
+        try:
+            jar = getattr(response, 'cookies', None)
+            if not jar:
+                return
+            current = self._cookies_to_dict(self.cookies)
+            changed: Dict[str, str] = {}
+            for name, morsel in jar.items():
+                value = getattr(morsel, 'value', morsel)
+                if not name or value is None or value == '':
+                    continue
+                if str(current.get(name)) != str(value):
+                    changed[str(name)] = str(value)
+            if not changed:
+                return
+            current.update(changed)
+            self.cookies = current
+            self.headers['Cookie'] = self._build_cookie_string()
+            logger.info(f"收到服务端续期 Cookie: {', '.join(sorted(changed)[:6])}")
+            self._persist_cookies(current)
+        except Exception as exc:
+            logger.debug("absorb response cookies failed: %s", exc)
+
+    def _persist_cookies(self, cookie_map: Dict[str, str]) -> None:
+        """把最新 Cookie 写回 cookies.txt / cookies.pkl / storage_state.json。"""
+        now = time.time()
+        if now - self._last_cookie_write < 5:
+            self._cookie_write_pending = True
+            return
+        self._last_cookie_write = now
+        self._cookie_write_pending = False
+        paths = self._cookie_persist_paths()
+
+        cookie_str = '; '.join(f'{k}={v}' for k, v in cookie_map.items() if k and v is not None)
+        try:
+            paths['txt'].write_text(cookie_str, encoding='utf-8')
+        except Exception as exc:
+            logger.warning(f"写入 cookies.txt 失败: {exc}")
+
+        try:
+            existing: Dict[str, Any] = {}
+            if paths['pkl'].exists():
+                with open(paths['pkl'], 'rb') as fh:
+                    existing = pickle.load(fh) or {}
+                if not isinstance(existing, dict):
+                    existing = {}
+            records: List[Dict[str, Any]] = []
+            seen = set()
+            for item in (existing.get('cookies') or []):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get('name', ''))
+                if name in cookie_map:
+                    item = dict(item)
+                    item['value'] = cookie_map[name]
+                if name:
+                    seen.add(name)
+                records.append(item)
+            for name, value in cookie_map.items():
+                if name in seen:
+                    continue
+                records.append({
+                    'name': name, 'value': value, 'domain': '.douyin.com', 'path': '/',
+                    'expires': -1, 'httpOnly': True, 'secure': True, 'sameSite': 'None',
+                })
+            payload = {
+                'cookies': records,
+                'created_at': now,
+                'last_used': now,
+                'login_method': existing.get('login_method') or 'refresh',
+                'is_valid': True,
+            }
+            with open(paths['pkl'], 'wb') as fh:
+                pickle.dump(payload, fh)
+        except Exception as exc:
+            logger.warning(f"写入 cookies.pkl 失败: {exc}")
+
+        # storage_state.json 供浏览器兜底复用：只更新已有条目的值，保留 origins
+        try:
+            if paths['state'].exists():
+                state = json.loads(paths['state'].read_text(encoding='utf-8'))
+                if isinstance(state, dict) and isinstance(state.get('cookies'), list):
+                    touched = 0
+                    for item in state['cookies']:
+                        name = str(item.get('name', ''))
+                        if name in cookie_map and item.get('value') != cookie_map[name]:
+                            item['value'] = cookie_map[name]
+                            touched += 1
+                    if touched:
+                        paths['state'].write_text(
+                            json.dumps(state, ensure_ascii=False), encoding='utf-8'
+                        )
+        except Exception as exc:
+            logger.debug("update storage_state failed: %s", exc)
+
+        self.login_expiry_at = self._cookie_expiry_at(cookie_map)
+        if self.login_expiry_at:
+            days = (self.login_expiry_at - now) / 86400
+            when = datetime.fromtimestamp(self.login_expiry_at).strftime('%Y-%m-%d')
+            logger.info(f"Cookie 已回写，登录态有效期至 {when}（剩余 {days:.0f} 天）")
+
+    def _report_session_validity(self, cookie_map: Dict[str, str]) -> None:
+        """打印登录态有效期，方便判断距离下次登录还有多久。"""
+        expire_at = self._cookie_expiry_at(cookie_map)
+        self.login_expiry_at = expire_at
+        if not expire_at:
+            return
+        days = (expire_at - time.time()) / 86400
+        when = datetime.fromtimestamp(expire_at).strftime('%Y-%m-%d')
+        if days >= 0:
+            console.print(f"[green]登录态有效期至 {when}（剩余 {days:.0f} 天）[/green]")
+        else:
+            console.print(f"[yellow]登录态已于 {when} 过期（{abs(days):.0f} 天前）[/yellow]")
+
+    async def _fetch_cookies_via_browser(self, force: bool = True, headless: bool = False) -> Dict[str, str]:
+        """用 Playwright 打开浏览器读取当前登录态 Cookie（失败返回空字典）。
+
+        force=True 时强制重新访问抖音，即使 cookies.pkl 看起来"很新"，
+        这样浏览器里已经滚新的会话才能被读回来。
+        """
+        try:
+            async with AutoCookieManager(cookie_file='cookies.pkl', headless=headless) as cm:
+                if force and not cm._need_refresh() and cm.current_cookies is not None:
+                    # 让管理器认为需要刷新，从而真实地去读一次浏览器里的最新登录态
+                    cm.current_cookies.created_at = 0
+                cookies_list = await cm.get_cookies()
+            if not cookies_list:
+                return {}
+            cookie_map = self._cookies_to_dict(cookies_list)
+            if not any(
+                cookie_map.get(k)
+                for k in ('sessionid', 'sessionid_ss', 'sid_tt', 'passport_auth_status')
+            ):
+                logger.warning("浏览器返回的 Cookie 不含登录字段，登录态可能已失效")
+            return cookie_map
+        except Exception as exc:
+            logger.warning(f"通过浏览器获取 Cookie 失败: {exc}")
+            return {}
 
     def _load_cookie_records_from_pickle(self, file_path: str = 'cookies.pkl') -> List[Dict[str, Any]]:
         """Load browser cookie records with domain/path metadata for Playwright reuse."""
@@ -539,6 +754,7 @@ class UnifiedDownloader:
                     req_headers.pop('Cookie', None)
                 async with aiohttp.ClientSession(cookies=cookie_map or None) as session:
                     async with session.get(full_url, headers=req_headers, timeout=10) as response:
+                        self._absorb_response_cookies(response)
                         body = await response.read()
                         if response.status != 200 or not body:
                             continue
@@ -652,10 +868,16 @@ class UnifiedDownloader:
                 )
                 await page.wait_for_timeout(5000)
 
-                if await self._browser_profile_requires_login(page):
+                # 关键：先抓取「已经渲染出来」的作品链接，再判断登录墙。
+                # 未登录时页面会提示"登录后查看更多作品"，但首屏作品链接通常已经存在，
+                # 以前一遇到登录提示就直接放弃，导致主页批量下载拿不到任何作品。
+                early_links = await self._capture_browser_profile_links(page)
+                collected_links.update(early_links)
+
+                if not early_links and not collected_awemes and await self._browser_profile_requires_login(page):
                     if headless:
                         logger.warning(
-                            "Browser recovery still hits the login wall in headless mode; "
+                            "Browser recovery hit the login wall with no visible posts; "
                             "set user_posts_browser_headless: false and login once in the opened browser"
                         )
                         return {'awemes': [], 'links': {}}
@@ -673,6 +895,11 @@ class UnifiedDownloader:
                     if await self._browser_profile_requires_login(page):
                         logger.warning("Browser recovery timed out waiting for profile login access")
                         return {'awemes': [], 'links': {}}
+                elif early_links:
+                    logger.info(
+                        "Browser recovery: 首屏已抓到 %s 个作品链接（未登录也可继续翻页）",
+                        len(early_links),
+                    )
 
                     try:
                         await context.storage_state(path=storage_state_path)
@@ -849,6 +1076,7 @@ class UnifiedDownloader:
         user_id: str,
         expected_count: int = 0,
         existing_ids: Optional[Set[str]] = None,
+        limit: int = 0,
     ) -> List[Dict[str, Any]]:
         """Use a browser session to recover user posts when API pagination stalls."""
         existing_ids = set(existing_ids or set())
@@ -881,6 +1109,9 @@ class UnifiedDownloader:
             recovered_awemes.append(aweme)
             recovered_ids.add(aweme_id)
 
+        if expected_count and len(existing_ids) + len(recovered_ids) >= expected_count:
+            return recovered_awemes
+
         link_only_ids = [
             aweme_id for aweme_id in (recovery_result.get('links') or {}).keys()
             if aweme_id not in existing_ids and aweme_id not in recovered_ids
@@ -888,15 +1119,31 @@ class UnifiedDownloader:
         if link_only_ids:
             logger.info(
                 "Browser recovery found %s extra visible post links without payloads; "
-                "fetching detail one by one",
+                "fetching details one by one",
                 len(link_only_ids),
             )
+            links_map = recovery_result.get('links') or {}
             for aweme_id in link_only_ids:
+                if limit and len(recovered_awemes) >= limit:
+                    logger.info("已达到本次下载上限 %s，停止继续抓取作品详情", limit)
+                    break
+                detail = None
                 try:
-                    detail = await self._fetch_video_info(aweme_id)
+                    detail = await self._fetch_aweme_from_user_page_locate(user_id, aweme_id)
                 except Exception as e:
-                    logger.warning("Fetch detail for recovered aweme %s failed: %s", aweme_id, e)
-                    continue
+                    logger.warning("Locate-item recovery for aweme %s failed: %s", aweme_id, e)
+
+                # 接口/定位都拿不到时，直接打开作品页用浏览器取（未登录也能成功）
+                if not detail and self._single_aweme_browser_recovery_enabled():
+                    page_url = links_map.get(aweme_id) or f"https://www.douyin.com/video/{aweme_id}"
+                    try:
+                        logger.info("改用浏览器打开作品页获取详情: %s", aweme_id)
+                        detail = await self._fetch_aweme_via_local_playwright(
+                            page_url, aweme_id, headless=self._single_aweme_browser_headless()
+                        )
+                    except Exception as e:
+                        logger.warning("浏览器获取作品 %s 详情失败: %s", aweme_id, e)
+                        detail = None
 
                 detail_id = self._get_aweme_id_from_info(detail or {}) or aweme_id
                 if not detail or detail_id in existing_ids or detail_id in recovered_ids:
@@ -927,6 +1174,31 @@ class UnifiedDownloader:
                 local_cookie_map.setdefault(k, v)
             logger.info(f"Loaded {len(pkl_cookie_map)} cookies from cookies.pkl")
 
+        # cookies.txt 与 cookies.pkl 可能一新一旧：登录相关字段要以「更晚过期」的为准，
+        # 否则旧的 cookies.txt 会覆盖浏览器新刷出来的会话，导致接口一直 403。
+        login_keys = (
+            'sessionid', 'sessionid_ss', 'sid_tt', 'sid_guard',
+            'passport_auth_status', 'passport_auth_status_ss', 'uid_tt', 'msToken',
+        )
+        txt_expiry = self._cookie_expiry_at(txt_cookie_map)
+        pkl_expiry = self._cookie_expiry_at(pkl_cookie_map)
+        fresher = None
+        if txt_expiry and pkl_expiry:
+            fresher = pkl_cookie_map if pkl_expiry > txt_expiry else txt_cookie_map
+        elif pkl_expiry and not txt_expiry:
+            fresher = pkl_cookie_map
+        if fresher is not None:
+            applied = 0
+            for key in login_keys:
+                value = fresher.get(key)
+                if value and local_cookie_map.get(key) != value:
+                    local_cookie_map[key] = value
+                    applied += 1
+            if applied and fresher is pkl_cookie_map:
+                logger.info(
+                    "cookies.pkl 的登录态比 cookies.txt 更新，已优先使用 pkl 的 %s 个字段", applied
+                )
+
         has_login_cookie = any(
             config_cookie_map.get(k)
             for k in ('sessionid', 'sessionid_ss', 'sid_tt', 'passport_auth_status')
@@ -941,42 +1213,81 @@ class UnifiedDownloader:
             cookie_map.update(local_cookie_map)
             logger.info("Merged config cookies with local cookies")
 
+        if cookie_map and self._cookie_expiry_hint(cookie_map) and self.auto_cookie:
+            # 本地已有 Cookie 但登录态已过期：cookies 为 auto 时先尝试用浏览器刷新，
+            # 避免用户只看到一堆 403 却不知道为什么。
+            skipped_hours = self._skip_auto_refresh_reason()
+            if skipped_hours is not None:
+                logger.info(
+                    "%.1f 小时前刚尝试过自动刷新且未取到登录态，本次跳过；"
+                    "重新登录后可运行 --refresh-session 强制刷新",
+                    skipped_hours,
+                )
+            else:
+                logger.info("本地 Cookie 已过期，尝试用浏览器刷新登录态")
+                refreshed = await self._fetch_cookies_via_browser(headless=True)
+                if refreshed and any(
+                    refreshed.get(k)
+                    for k in ('sessionid', 'sessionid_ss', 'sid_tt', 'passport_auth_status')
+                ):
+                    cookie_map = refreshed
+                    self._remember_auto_refresh(success=True)
+                    logger.info("浏览器刷新得到有效登录态")
+                else:
+                    self._remember_auto_refresh(success=False)
+                    if refreshed:
+                        logger.warning(
+                            "浏览器中的登录态也已失效（缺少 sessionid 等字段），将使用现有 Cookie 继续"
+                        )
+                    logger.warning(
+                        "自动刷新未取到登录态，%.0f 小时内不再重复尝试（可用 --refresh-session 强制刷新）",
+                        self.AUTO_REFRESH_COOLDOWN_HOURS,
+                    )
+
         if cookie_map:
             self.cookies = cookie_map
             cookie_str = '; '.join([f'{k}={v}' for k, v in cookie_map.items() if k and v is not None])
             self.headers['Cookie'] = cookie_str
             from apiproxy.douyin import douyin_headers
             douyin_headers['Cookie'] = cookie_str
+            # 提前发现登录态过期，避免用户只看到莫名的 403
+            expiry_hint = self._cookie_expiry_hint(cookie_map)
+            self._cookies_expired = bool(expiry_hint)
+            if expiry_hint:
+                logger.warning(expiry_hint)
+                console.print(f"[yellow]⚠ {expiry_hint}[/yellow]")
+            self._report_session_validity(cookie_map)
             return
 
         if self.auto_cookie:
             try:
                 console.print("[cyan]Auto fetching cookies...[/cyan]")
-                async with AutoCookieManager(cookie_file='cookies.pkl', headless=False) as cm:
-                    cookies_list = await cm.get_cookies()
-                    if cookies_list:
-                        cookie_map = self._cookies_to_dict(cookies_list)
-                        self.cookies = cookie_map
-                        cookie_str = '; '.join([f'{k}={v}' for k, v in cookie_map.items() if k and v is not None])
-                        if cookie_str:
-                            self.headers['Cookie'] = cookie_str
-                            from apiproxy.douyin import douyin_headers
-                            douyin_headers['Cookie'] = cookie_str
-                            console.print("[green]Cookie fetched successfully[/green]")
-                            return
+                cookie_map = await self._fetch_cookies_via_browser()
+                if cookie_map:
+                    self.cookies = cookie_map
+                    cookie_str = '; '.join(
+                        [f'{k}={v}' for k, v in cookie_map.items() if k and v is not None]
+                    )
+                    if cookie_str:
+                        self.headers['Cookie'] = cookie_str
+                        from apiproxy.douyin import douyin_headers
+                        douyin_headers['Cookie'] = cookie_str
+                        console.print("[green]Cookie fetched successfully[/green]")
+                        return
                 console.print("[yellow]Auto cookie fetch failed, continue without cookie[/yellow]")
             except Exception as e:
                 logger.warning(f"Auto cookie fetch failed: {e}")
                 console.print("[yellow]Auto cookie fetch failed, continue without cookie[/yellow]")
 
     def detect_content_type(self, url: str) -> ContentType:
-        """濡偓濞村┚RL閸愬懎顔愮猾璇茬€?"""
+        """根据链接判断内容类型（视频 / 图文 / 主页 / 合集 / 音乐 / 直播）"""
+        # 图文作品链接形如 /note/<id>，需先于单作品标记判断，否则会被识别成视频
+        if '/note/' in url:
+            return ContentType.IMAGE
         if self._url_has_single_aweme_marker(url):
             return ContentType.VIDEO
         elif '/user/' in url:
             return ContentType.USER
-        elif '/note/' in url:
-            return ContentType.IMAGE
         elif '/collection/' in url or '/mix/' in url:
             return ContentType.MIX
         elif '/music/' in url:
@@ -984,19 +1295,19 @@ class UnifiedDownloader:
         elif 'live.douyin.com' in url:
             return ContentType.LIVE
         else:
-            return ContentType.VIDEO  # 姒涙顓昏ぐ鎾茬稊鐟欏棝顣?
+            return ContentType.VIDEO  # 默认按视频作品处理
     
     async def resolve_short_url(self, url: str) -> str:
-        """鐟欙絾鐎介惌顓㈡懠閹?"""
+        """解析 v.douyin.com 短链接，返回真实地址"""
         if 'v.douyin.com' in url:
             try:
-                # 娴ｈ法鏁ら崥灞绢劄鐠囬攱鐪伴懢宄板絿闁插秴鐣鹃崥?
+                # 使用同步请求获取重定向后的地址
                 response = requests.get(url, headers=self.headers, allow_redirects=True, timeout=10)
                 final_url = response.url
-                logger.info(f"鐟欙絾鐎介惌顓㈡懠閹? {url} -> {final_url}")
+                logger.info(f"解析短链接: {url} -> {final_url}")
                 return final_url
             except Exception as e:
-                logger.warning(f"鐟欙絾鐎介惌顓㈡懠閹恒儱銇戠拹? {e}")
+                logger.warning(f"解析短链接失败: {e}")
         return url
 
     def _url_has_single_aweme_marker(self, url: str) -> bool:
@@ -1011,13 +1322,13 @@ class UnifiedDownloader:
         return any(re.search(pattern, url) for pattern in single_aweme_patterns)
     
     def extract_id_from_url(self, url: str, content_type: ContentType = None) -> Optional[str]:
-        """娴犲抖RL閹绘劕褰嘔D
+        """从链接中提取 ID
         
         Args:
-            url: 鐟曚浇袙閺嬫劗娈慤RL
-            content_type: 閸愬懎顔愮猾璇茬€烽敍鍫濆讲闁绱濋悽銊ょ艾閹稿洤顕遍幓鎰絿閿?
+            url: 作品或主页链接
+            content_type: 内容类型，留空时自动判断
         """
-        # 婵″倹鐏夊鑼叀閺勵垳鏁ら幋鐑姐€夐棃顫礉閻╁瓨甯撮幓鎰絿閻劍鍩汭D
+        # 主页链接优先提取 sec_user_id
         if content_type == ContentType.USER:
             user_patterns = [
                 r'/user/([\w.-]+)',
@@ -1031,7 +1342,7 @@ class UnifiedDownloader:
                     logger.info(f"提取到用户ID: {user_id}")
                     return user_id
 
-        # 鐟欏棝顣禝D濡€崇础閿涘牅绱崗鍫礆
+        # 作品 ID 的常见参数形式
         video_patterns = [
             r'/video/(\d+)',
             r'/note/(\d+)',
@@ -1060,7 +1371,7 @@ class UnifiedDownloader:
                     logger.info(f"提取到用户ID: {user_id}")
                     return user_id
         
-        # 閸忔湹绮Ο鈥崇础
+        # 兜底匹配
         other_patterns = [
             r'/collection/(\d+)',
             r'/music/(\d+)'
@@ -1071,35 +1382,52 @@ class UnifiedDownloader:
             if match:
                 return match.group(1)
         
-        # 鐏忔繆鐦禒宥禦L娑擃厽褰侀崣鏍ㄦ殶鐎涙“D
+        # 无法从链接中识别出 ID
         number_match = re.search(r'(\d{15,20})', url)
         if number_match:
             video_id = number_match.group(1)
             logger.info(f"从URL中提取到数字ID: {video_id}")
             return video_id
         
-        logger.error(f"閺冪姵纭舵禒宥禦L閹绘劕褰嘔D: {url}")
+        logger.error(f"无法从URL提取ID: {url}")
         return None
 
     def _get_aweme_id_from_info(self, info: Dict) -> Optional[str]:
-        """娴?aweme 娣団剝浼呮稉顓熷絹閸?aweme_id"""
+        """从 aweme 数据中取出 aweme_id"""
         try:
-            if 'aweme_id' in info:
-                return str(info.get('aweme_id'))
-            # aweme_detail 缂佹挻鐎?
-            return str(info.get('aweme', {}).get('aweme_id') or info.get('aweme_id'))
+            if not isinstance(info, dict):
+                return None
+            value = info.get('aweme_id')
+            if not value and isinstance(info.get('aweme'), dict):
+                value = info.get('aweme', {}).get('aweme_id')
+            if value is None or value == '':
+                return None
+            return str(value)
         except Exception:
             return None
 
+    def _aweme_id_matches(self, info: Dict, expected_aweme_id: str) -> bool:
+        """Return whether an aweme payload belongs to the requested aweme id."""
+        actual_aweme_id = self._get_aweme_id_from_info(info)
+        return bool(actual_aweme_id and str(actual_aweme_id) == str(expected_aweme_id))
+
+    def _build_post_folder_name(self, create_time: str, desc: str, aweme_id: Optional[str]) -> str:
+        """Build a unique folder name for a post."""
+        base = f"{create_time}_{desc}" if desc else create_time
+        suffix = f"_{aweme_id}" if aweme_id else ""
+        max_base_len = max(20, 120 - len(suffix))
+        folder_name = self._safe_name(base, default=create_time, max_len=max_base_len)
+        return self._safe_name(f"{folder_name}{suffix}", default=create_time, max_len=120)
+
     def _get_sec_uid_from_info(self, info: Dict) -> Optional[str]:
-        """娴?aweme 娣団剝浼呮稉顓熷絹閸欐牔缍旈懓?sec_uid"""
+        """从 aweme 数据中取出作者的 sec_uid"""
         try:
             return info.get('author', {}).get('sec_uid')
         except Exception:
             return None
 
     def _should_skip_increment(self, context: str, info: Dict, mix_id: Optional[str] = None, music_id: Optional[str] = None, sec_uid: Optional[str] = None) -> bool:
-        """閺嶈宓佹晶鐐哄櫤闁板秶鐤嗘稉搴㈡殶閹诡喖绨辩拋鏉跨秿閸掋倖鏌囬弰顖氭儊鐠哄疇绻冩稉瀣祰"""
+        """按增量配置判断该作品是否已下载过，已下载则跳过"""
         if not self.db:
             return False
         aweme_id = self._get_aweme_id_from_info(info)
@@ -1125,7 +1453,7 @@ class UnifiedDownloader:
         return False
 
     def _record_increment(self, context: str, info: Dict, mix_id: Optional[str] = None, music_id: Optional[str] = None, sec_uid: Optional[str] = None):
-        """娑撳娴囬幋鎰閸氬骸鍟撻崗銉︽殶閹诡喖绨辩拋鏉跨秿"""
+        """记录已下载的作品，供增量下载判断使用"""
         if not self.db:
             return
         aweme_id = self._get_aweme_id_from_info(info)
@@ -1149,37 +1477,50 @@ class UnifiedDownloader:
             pass
     
     async def download_single_video(self, url: str, progress=None) -> bool:
-        """娑撳娴囬崡鏇氶嚋鐟欏棝顣?閸ョ偓鏋?"""
+        """下载单个作品（视频或图文）"""
         try:
-            # 鐟欙絾鐎介惌顓㈡懠閹?
+            # 解析短链接
             url = await self.resolve_short_url(url)
             
-            # 閹绘劕褰嘔D
+            # 提取作品 ID
             video_id = self.extract_id_from_url(url, ContentType.VIDEO)
             if not video_id:
-                logger.error(f"閺冪姵纭舵禒宥禦L閹绘劕褰嘔D: {url}")
+                logger.error(f"无法从URL提取ID: {url}")
                 return False
             
-            # 婵″倹鐏夊▽鈩冩箒閹绘劕褰囬崚鎷岊潒妫版厲D閿涘苯鐨剧拠鏇氱稊娑撻缚顫嬫０鎱朌閻╁瓨甯存担璺ㄦ暏
+            # 链接中没有作品 ID 时，从主页页面中定位作品
             if not video_id and '/user/' not in url:
-                # 閸欘垵鍏橀惌顓㈡懠閹恒儳娲块幒銉ュ瘶閸氼偂绨＄憴鍡涱暥ID
+                # 退化为从跳转地址的路径中提取作品 ID
                 video_id = url.split('/')[-2] if url.endswith('/') else url.split('/')[-1]
-                logger.info(f"鐏忔繆鐦禒搴ｇ叚闁剧偓甯寸捄顖氱窞閹绘劕褰嘔D: {video_id}")
+                logger.info(f"尝试从短链接路径提取ID: {video_id}")
             
             if not video_id:
-                logger.error(f"閺冪姵纭舵禒宥禦L閹绘劕褰囩憴鍡涱暥ID: {url}")
+                logger.error(f"无法从URL提取视频ID: {url}")
                 return False
             
-            # 闂勬劙鈧?
+            # 限速等待
             await self.rate_limiter.acquire()
             
-            # 閼惧嘲褰囩憴鍡涱暥娣団剝浼?
+            # 获取作品信息
             if progress:
-                progress.update(task_id=progress.task_ids[-1], description="閼惧嘲褰囩憴鍡涱暥娣団剝浼?..")
+                progress.update(task_id=progress.task_ids[-1], description="获取作品信息...")
             
-            video_info = await self.retry_manager.execute_with_retry(
-                self._fetch_video_info, video_id
-            )
+            video_info = None
+            # 登录态已过期时接口基本只会返回空数据，直接走浏览器更快也更稳
+            if self._cookies_expired and self._single_aweme_browser_recovery_enabled():
+                console.print("[cyan]检测到 Cookie 已过期，优先用浏览器获取作品信息…[/cyan]")
+                try:
+                    video_info = await self._fetch_aweme_via_local_playwright(
+                        url, video_id, headless=self._single_aweme_browser_headless()
+                    )
+                except Exception as exc:
+                    logger.warning(f"浏览器优先获取失败，回退接口: {exc}")
+                    video_info = None
+
+            if not video_info:
+                video_info = await self.retry_manager.execute_with_retry(
+                    self._fetch_video_info, video_id
+                )
 
             if not video_info and '/user/' in url and self._url_has_single_aweme_marker(url):
                 logger.info(
@@ -1187,15 +1528,35 @@ class UnifiedDownloader:
                     video_id,
                 )
                 video_info = await self._fetch_aweme_from_modal_url(url, video_id)
-            
+
+            # 接口在没有有效登录态时常常返回空数据（200 + 空响应体），
+            # 但浏览器加载作品页仍能拿到 aweme/detail，因此用浏览器兜底。
+            if not video_info and self._single_aweme_browser_recovery_enabled():
+                console.print(
+                    "[yellow]接口未返回作品信息，改用浏览器兜底获取（无需登录即可下载公开作品）…[/yellow]"
+                )
+                try:
+                    video_info = await self._fetch_aweme_via_local_playwright(
+                        url, video_id, headless=self._single_aweme_browser_headless()
+                    )
+                except Exception as exc:
+                    logger.warning(f"浏览器兜底获取作品信息失败: {exc}")
+                    video_info = None
+                if video_info:
+                    logger.info("浏览器兜底成功获取作品信息: %s", video_id)
+
             if not video_info:
-                logger.error(f"閺冪姵纭堕懢宄板絿鐟欏棝顣舵穱鈩冧紖: {video_id}")
+                logger.error(f"无法获取视频信息: {video_id}")
+                console.print(
+                    "[red]接口与浏览器均未能获取该作品，若为私密/需登录内容，"
+                    "请重新运行 cookie_extractor.py 登录后再试。[/red]"
+                )
                 self.stats.failed += 1
                 return False
             
-            # 娑撳娴囩憴鍡涱暥閺傚洣娆?
+            # 下载作品文件
             if progress:
-                progress.update(task_id=progress.task_ids[-1], description="娑撳娴囩憴鍡涱暥閺傚洣娆?..")
+                progress.update(task_id=progress.task_ids[-1], description="下载作品文件...")
             
             success = await self._download_media_files(video_info, progress)
             
@@ -1216,15 +1577,15 @@ class UnifiedDownloader:
             self.stats.total += 1
     
     async def _fetch_video_info(self, video_id: str) -> Optional[Dict]:
-        """閼惧嘲褰囩憴鍡涱暥娣団剝浼?"""
+        """获取作品详情"""
         try:
-            # 閻╁瓨甯存担璺ㄦ暏 DouYinCommand.py 娑擃厽鍨氶崝鐔烘畱 Douyin 缁?
+            # 优先复用 DouYinCommand.py 中的 Douyin 类
             from apiproxy.douyin.douyin import Douyin
             
-            # 閸掓稑缂?Douyin 鐎圭偘绶?
+            # 创建 Douyin 实例
             dy = Douyin(database=False)
             
-            # 鐠佸墽鐤嗛幋鎴滄粦閻?cookies 閸?douyin_headers
+            # 把当前 cookies 注入 douyin_headers
             if hasattr(self, 'cookies') and self.cookies:
                 cookie_str = self._build_cookie_string()
                 if cookie_str:
@@ -1233,11 +1594,17 @@ class UnifiedDownloader:
                     logger.info(f"已将 Cookie 注入 Douyin 请求头: {cookie_str[:100]}...")
             
             try:
-                # 娴ｈ法鏁ら悳鐗堟箒閻ㄥ嫭鍨氶崝鐔风杽閻?
+                # 使用该类自身的请求封装
                 result = dy.getAwemeInfo(video_id)
                 if result:
-                    logger.info(f"Douyin 类成功返回作品信息: {result.get('desc', '')[:30]}")
-                    return result
+                    if self._aweme_id_matches(result, video_id):
+                        logger.info(f"Douyin 类成功返回作品信息: {result.get('desc', '')[:30]}")
+                        return result
+                    logger.warning(
+                        "Douyin class returned mismatched aweme: requested=%s, actual=%s",
+                        video_id,
+                        self._get_aweme_id_from_info(result),
+                    )
                 else:
                     logger.error("Douyin class returned empty result")
                     
@@ -1249,12 +1616,12 @@ class UnifiedDownloader:
             import traceback
             traceback.print_exc()
         
-        # 婵″倹鐏?Douyin 缁銇戠拹銉礉鐏忔繆鐦径鍥╂暏閹恒儱褰涢敍鍧昬sdouyin閿涘本妫ら棁鈧琗-Bogus閿?
+        # Douyin 类失败时，退化为直接用 aiohttp 请求备用接口
         try:
             fallback_url = f"https://www.iesdouyin.com/web/api/v2/aweme/iteminfo/?item_ids={video_id}"
             logger.info(f"尝试备用接口获取作品信息: {fallback_url}")
             
-            # 鐠佸墽鐤嗛弴鎾偓姘辨暏閻ㄥ嫯顕Ч鍌氥仈
+            # 组装备用接口请求头
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                 'Referer': 'https://www.douyin.com/',
@@ -1283,9 +1650,11 @@ class UnifiedDownloader:
                         
                         item_list = (data or {}).get('item_list') or []
                         if item_list:
-                            aweme_detail = item_list[0]
-                            logger.info("备用接口成功返回作品信息")
-                            return aweme_detail
+                            for aweme_detail in item_list:
+                                if self._aweme_id_matches(aweme_detail, video_id):
+                                    logger.info("备用接口成功返回作品信息")
+                                    return aweme_detail
+                            logger.error("备用接口返回了作品列表，但没有匹配目标 aweme_id")
                         else:
                             logger.error("备用接口未返回 item_list")
                             
@@ -1369,6 +1738,7 @@ class UnifiedDownloader:
                     req_headers.pop('Cookie', None)
                 async with aiohttp.ClientSession(cookies=cookie_map or None) as session:
                     async with session.get(full_url, headers=req_headers, timeout=15) as response:
+                        self._absorb_response_cookies(response)
                         if response.status != 200:
                             continue
                         body = await response.read()
@@ -1412,12 +1782,29 @@ class UnifiedDownloader:
                     return aweme
         return None
 
-    async def _fetch_aweme_via_local_playwright(self, url: str, aweme_id: str) -> Optional[Dict]:
+    def _single_aweme_browser_recovery_enabled(self) -> bool:
+        """接口拿不到作品时，是否允许用浏览器兜底。"""
+        return bool(self.config.get('single_aweme_browser_recovery', True))
+
+    def _single_aweme_browser_headless(self) -> bool:
+        """浏览器兜底默认无头运行，可用 single_aweme_browser_headless 覆盖。"""
+        value = self.config.get('single_aweme_browser_headless')
+        if value is None:
+            return True
+        return bool(value)
+
+    async def _fetch_aweme_via_local_playwright(
+        self, url: str, aweme_id: str, headless: Optional[bool] = None
+    ) -> Optional[Dict]:
         """Open the target URL in Playwright and capture the target aweme from network responses."""
         from playwright.async_api import async_playwright
 
         storage_state_path = self._get_playwright_storage_state_path()
-        headless = bool(self.config.get('single_aweme_browser_headless', self.config.get('user_posts_browser_headless', False)))
+        if headless is None:
+            headless = bool(self.config.get(
+                'single_aweme_browser_headless',
+                self.config.get('user_posts_browser_headless', False),
+            ))
         login_timeout = int(self.config.get('single_aweme_browser_login_timeout', 300) or 300)
         found_aweme: Optional[Dict] = None
 
@@ -1601,8 +1988,8 @@ class UnifiedDownloader:
             return None
     
     def _build_detail_params(self, aweme_id: str) -> str:
-        """閺嬪嫬缂撶拠锔藉剰API閸欏倹鏆?"""
-        # 娴ｈ法鏁ゆ稉搴ｅ箛閺?douyinapi.py 閻╃鎮撻惃鍕棘閺佺増鐗稿?
+        """构建作品详情接口的参数串"""
+        # 复用 douyinapi.py 中的参数模板
         params = [
             f'aweme_id={aweme_id}',
             'device_platform=webapp',
@@ -1632,8 +2019,8 @@ class UnifiedDownloader:
                 dt_obj = datetime.fromtimestamp(time.time())
             create_time = dt_obj.strftime('%Y-%m-%d_%H-%M-%S')
 
-            folder_name = f"{create_time}_{desc}" if desc else create_time
-            folder_name = self._safe_name(folder_name, default=create_time, max_len=120)
+            aweme_id = self._get_aweme_id_from_info(video_info)
+            folder_name = self._build_post_folder_name(create_time, desc, aweme_id)
             save_dir = self.save_path / author_name / folder_name
             save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2065,25 +2452,54 @@ class UnifiedDownloader:
                 logger.info(f"Skip existing file: {save_path.name}")
                 return True
 
+            # CDN 对请求头较敏感（尤其是 Referer），按常见组合依次回退重试，
+            # 避免整页下载时个别图片因 403 直接失败。
             header_variants = []
             header_variants.append(dict(self.headers))
             if 'Cookie' in self.headers:
                 no_cookie_headers = dict(self.headers)
                 no_cookie_headers.pop('Cookie', None)
                 header_variants.append(no_cookie_headers)
+            header_variants.append({
+                'User-Agent': self.headers.get('User-Agent', 'Mozilla/5.0'),
+                'Referer': 'https://www.douyin.com/',
+                'Accept': 'image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8',
+                'Accept-Language': 'zh-CN,zh;q=0.9',
+                'Accept-Encoding': 'gzip, deflate',
+            })
+            header_variants.append({})
 
-            for headers in header_variants:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(url, headers=headers) as response:
-                        if response.status == 200:
-                            content = await response.read()
-                            with open(save_path, 'wb') as f:
-                                f.write(content)
-                            return True
-                        if required:
-                            logger.error(f"Download failed, status code: {response.status}")
-                        else:
-                            logger.warning(f"Optional file failed, status code: {response.status}")
+            last_status = None
+            for index, headers in enumerate(header_variants, start=1):
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url, headers=headers) as response:
+                            if response.status == 200:
+                                content = await response.read()
+                                if not content:
+                                    logger.warning(f"空响应，尝试下一个请求头组合: {save_path.name}")
+                                    last_status = 200
+                                    continue
+                                with open(save_path, 'wb') as f:
+                                    f.write(content)
+                                if index > 1:
+                                    logger.info(
+                                        f"使用第 {index} 组请求头成功下载 {save_path.name}"
+                                    )
+                                return True
+                            last_status = response.status
+                            logger.debug(
+                                "尝试 %s/%s 失败（HTTP %s）: %s",
+                                index, len(header_variants), response.status, url[:90],
+                            )
+                except Exception as exc:
+                    logger.debug("请求头组合 %s 请求异常: %s", index, exc)
+                    continue
+
+            if required:
+                logger.error(f"Download failed, status code: {last_status}")
+            else:
+                logger.warning(f"Optional file failed, status code: {last_status}")
 
         except Exception as e:
             if required:
@@ -2096,20 +2512,20 @@ class UnifiedDownloader:
     async def download_user_page(self, url: str) -> bool:
         """Download user page content."""
         try:
-            # 閹绘劕褰囬悽銊﹀煕ID
+            # 提取用户 ID
             user_id = self.extract_id_from_url(url, ContentType.USER)
             if not user_id:
-                logger.error(f"閺冪姵纭舵禒宥禦L閹绘劕褰囬悽銊﹀煕ID: {url}")
+                logger.error(f"无法从URL提取用户ID: {url}")
                 return False
             
             console.print(f"\n[cyan]Fetching post list for user {user_id}...[/cyan]")
             
-            # 閺嶈宓侀柊宥囩枂娑撳娴囨稉宥呮倱缁鐎烽惃鍕敶鐎?
+            # 根据 mode 配置决定下载内容（post / like / mix）
             mode = self.config.get('mode', ['post'])
             if isinstance(mode, str):
                 mode = [mode]
             
-            # 婢х偛濮為幀璁虫崲閸斺剝鏆熺紒鐔活吀
+            # 累加统计总数
             total_posts = 0
             if 'post' in mode:
                 total_posts += self.config.get('number', {}).get('post', 0) or 1
@@ -2131,7 +2547,7 @@ class UnifiedDownloader:
             return True
             
         except Exception as e:
-            logger.error(f"娑撳娴囬悽銊﹀煕娑撳銆夋径杈Е: {e}")
+            logger.error(f"下载用户主页失败: {e}")
             return False
 
     async def _process_user_post_aweme(self, aweme: Dict, user_id: str, downloaded: int, progress) -> bool:
@@ -2191,10 +2607,10 @@ class UnifiedDownloader:
         ) as progress:
             
             while True:
-                # 闂勬劙鈧?
+                # 限速等待
                 await self.rate_limiter.acquire()
                 
-                # 閼惧嘲褰囨担婊冩惂閸掓銆?
+                # 获取作品列表
                 posts_data = await self._fetch_user_posts(user_id, cursor)
                 if not posts_data:
                     break
@@ -2203,7 +2619,7 @@ class UnifiedDownloader:
                 if not aweme_list:
                     break
                 
-                # 娑撳娴囨担婊冩惂
+                # 逐个下载作品
                 for aweme in aweme_list:
                     aweme_id = self._get_aweme_id_from_info(aweme)
                     if aweme_id:
@@ -2219,7 +2635,7 @@ class UnifiedDownloader:
                     if success:
                         downloaded += 1
                 
-                # 濡偓閺屻儲妲搁崥锔芥箒閺囨潙顦?
+                # 没有更多数据则结束
                 if not posts_data.get('has_more'):
                     break
                 
@@ -2230,20 +2646,28 @@ class UnifiedDownloader:
                 cursor = next_cursor
 
             should_try_browser_recovery = bool(self.config.get('user_posts_browser_recovery', True))
-            if (
-                should_try_browser_recovery
-                and expected_post_count
-                and expected_post_count > len(seen_aweme_ids)
-                and (max_count <= 0 or len(seen_aweme_ids) < max_count)
-            ):
-                console.print(
-                    f"[yellow]API fetched {len(seen_aweme_ids)} / {expected_post_count} posts. "
-                    "Starting browser-assisted recovery...[/yellow]"
-                )
+            # 接口被限流/风控时通常拿不到作品数量，此时也应触发浏览器兜底，
+            # 否则「一条都没取到」这一最需要兜底的场景反而不会兜底。
+            fetched_short = bool(expected_post_count) and expected_post_count > len(seen_aweme_ids)
+            fetched_nothing = not seen_aweme_ids
+            under_limit = max_count <= 0 or len(seen_aweme_ids) < max_count
+            if should_try_browser_recovery and under_limit and (fetched_short or fetched_nothing):
+                if fetched_short:
+                    console.print(
+                        f"[yellow]API fetched {len(seen_aweme_ids)} / {expected_post_count} posts. "
+                        "Starting browser-assisted recovery...[/yellow]"
+                    )
+                else:
+                    console.print(
+                        "[yellow]API returned no posts (possible rate limit or expired cookie). "
+                        "Starting browser-assisted recovery...[/yellow]"
+                    )
+                remaining = (max_count - downloaded) if max_count > 0 else 0
                 recovered_awemes = await self._recover_user_posts_via_browser(
                     user_id,
                     expected_count=expected_post_count,
                     existing_ids=seen_aweme_ids,
+                    limit=remaining,
                 )
                 logger.info(
                     "Browser-assisted recovery returned %s additional post payloads",
@@ -2263,6 +2687,11 @@ class UnifiedDownloader:
                     success = await self._process_user_post_aweme(aweme, user_id, downloaded, progress)
                     if success:
                         downloaded += 1
+                if not downloaded:
+                    console.print(
+                        "[red]浏览器兜底也未取到作品，通常是 Cookie 已过期，"
+                        "请重新运行 cookie_extractor.py 后再试。[/red]"
+                    )
         
         console.print(f"[green]User posts completed, downloaded {downloaded} item(s).[/green]")
     
@@ -2335,6 +2764,7 @@ class UnifiedDownloader:
                     req_headers.pop('Cookie', None)
                 async with aiohttp.ClientSession(cookies=cookie_map or None) as session:
                     async with session.get(full_url, headers=req_headers, timeout=10) as response:
+                        self._absorb_response_cookies(response)
                         body = await response.read()
                         if response.status != 200:
                             logger.warning(f"User post api HTTP error: {response.status}")
@@ -2412,7 +2842,7 @@ class UnifiedDownloader:
             return None
 
     async def _download_user_likes(self, user_id: str):
-        """娑撳娴囬悽銊﹀煕閸犳粍顐介惃鍕稊閸?"""
+        """下载用户点赞的作品"""
         max_count = 0
         try:
             max_count = int(self.config.get('number', {}).get('like', 0))
@@ -2421,7 +2851,7 @@ class UnifiedDownloader:
         cursor = 0
         downloaded = 0
 
-        console.print(f"\n[green]瀵偓婵绗呮潪鐣屾暏閹村嘲鏋╁▎銏㈡畱娴ｆ粌鎼?..[/green]")
+        console.print(f"\n[green]✅ 开始下载用户喜欢的作品...[/green]")
 
         with Progress(
             SpinnerColumn(),
@@ -2433,10 +2863,10 @@ class UnifiedDownloader:
         ) as progress:
 
             while True:
-                # 闂勬劙鈧?
+                # 限速等待
                 await self.rate_limiter.acquire()
 
-                # 閼惧嘲褰囬崰婊勵偨閸掓銆?
+                # 获取点赞列表
                 likes_data = await self._fetch_user_likes(user_id, cursor)
                 if not likes_data:
                     break
@@ -2445,21 +2875,21 @@ class UnifiedDownloader:
                 if not aweme_list:
                     break
 
-                # 娑撳娴囨担婊冩惂
+                # 逐个下载作品
                 for aweme in aweme_list:
                     if max_count > 0 and downloaded >= max_count:
-                        console.print(f"[yellow]瀹歌尪鎻崚棰佺瑓鏉炶姤鏆熼柌蹇涙閸? {max_count}[/yellow]")
+                        console.print(f"[yellow]已设置下载数量上限: {max_count}[/yellow]")
                         return
 
                     if not self._check_time_filter(aweme):
                         continue
 
                     task_id = progress.add_task(
-                        f"娑撳娴囬崰婊勵偨 {downloaded + 1}",
+                        f"下载点赞 {downloaded + 1}",
                         total=100
                     )
 
-                    # 婢х偤鍣洪崚銈嗘焽
+                    # 增量判断
                     if self._should_skip_increment('like', aweme, sec_uid=user_id):
                         continue
 
@@ -2470,17 +2900,17 @@ class UnifiedDownloader:
                         progress.update(task_id, completed=100)
                         self._record_increment('like', aweme, sec_uid=user_id)
                     else:
-                        progress.update(task_id, description="[red]娑撳娴囨径杈Е[/red]")
+                        progress.update(task_id, description="[red]下载失败[/red]")
 
-                # 缂堝銆?
+                # 没有更多数据则结束
                 if not likes_data.get('has_more'):
                     break
                 cursor = likes_data.get('max_cursor', 0)
 
-        console.print(f"[green]閴?閸犳粍顐芥担婊冩惂娑撳娴囩€瑰本鍨氶敍灞藉彙娑撳娴?{downloaded} 娑撶實/green]")
+        console.print(f"[green]✅ 喜欢作品下载完成，共 {downloaded} 个[/green]")
 
     async def _fetch_user_likes(self, user_id: str, cursor: int = 0) -> Optional[Dict]:
-        """閼惧嘲褰囬悽銊﹀煕閸犳粍顐介惃鍕稊閸濅礁鍨悰?"""
+        """获取用户点赞列表"""
         try:
             params_list = [
                 f'sec_user_id={user_id}',
@@ -2509,15 +2939,16 @@ class UnifiedDownloader:
                 signed_params = self.utils.getXbogus(params)
                 full_url = f"{api_url}{signed_params}"
             except Exception as e:
-                logger.warning(f"閼惧嘲褰嘪-Bogus婢惰精瑙? {e}, 鐏忔繆鐦稉宥呯敨X-Bogus")
+                logger.warning(f"获取X-Bogus失败: {e}, 尝试使用默认X-Bogus")
                 full_url = f"{api_url}{params}"
 
-            logger.info(f"鐠囬攱鐪伴悽銊﹀煕閸犳粍顐介崚妤勩€? {full_url[:100]}...")
+            logger.info(f"请求用户喜欢列表: {full_url[:100]}...")
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(full_url, headers=self.headers, timeout=10) as response:
+                    self._absorb_response_cookies(response)
                     if response.status != 200:
-                        logger.error(f"鐠囬攱鐪版径杈Е閿涘瞼濮搁幀浣虹垳: {response.status}")
+                        logger.error(f"请求失败，HTTP 状态码: {response.status}")
                         return None
 
                     text = await response.text()
@@ -2529,17 +2960,17 @@ class UnifiedDownloader:
                     if data.get('status_code') == 0:
                         return data
                     else:
-                        logger.error(f"API鏉╂柨娲栭柨娆掝嚖: {data.get('status_msg', '閺堫亞鐓￠柨娆掝嚖')}")
+                        logger.error(f"API返回错误: {data.get('status_msg', '未知错误')}")
                         return None
         except Exception as e:
-            logger.error(f"閼惧嘲褰囬悽銊﹀煕閸犳粍顐介崚妤勩€冩径杈Е: {e}")
+            logger.error(f"获取用户喜欢列表失败: {e}")
         return None
 
     async def _download_user_mixes(self, user_id: str):
-        """娑撳娴囬悽銊﹀煕閻ㄥ嫭澧嶉張澶婃値闂嗗棴绱欓幐澶愬帳缂冾喖褰查梽鎰煑閺佷即鍣洪敍?"""
+        """下载用户的全部合集（先取合集列表，再逐个下载）"""
         max_allmix = 0
         try:
-            # 閸忕厧顔愰弮褔鏁崥?allmix 閹?mix
+            # 兼容旧键名：allmix 优先，其次 mix
             number_cfg = self.config.get('number', {}) or {}
             max_allmix = int(number_cfg.get('allmix', number_cfg.get('mix', 0)) or 0)
         except Exception:
@@ -2548,7 +2979,7 @@ class UnifiedDownloader:
         cursor = 0
         fetched = 0
 
-        console.print(f"\n[green]瀵偓婵骞忛崣鏍暏閹村嘲鎮庨梿鍡楀灙鐞?..[/green]")
+        console.print(f"\n[green]✅ 开始获取用户合集列表...[/green]")
         while True:
             await self.rate_limiter.acquire()
             mix_list_data = await self._fetch_user_mix_list(user_id, cursor)
@@ -2561,11 +2992,11 @@ class UnifiedDownloader:
 
             for mix in mix_infos:
                 if max_allmix > 0 and fetched >= max_allmix:
-                    console.print(f"[yellow]瀹歌尪鎻崚鏉挎値闂嗗棙鏆熼柌蹇涙閸? {max_allmix}[/yellow]")
+                    console.print(f"[yellow]已设置合集下载数量上限: {max_allmix}[/yellow]")
                     return
                 mix_id = mix.get('mix_id')
                 mix_name = mix.get('mix_name', '')
-                console.print(f"[cyan]娑撳娴囬崥鍫ユ肠[/cyan]: {mix_name} ({mix_id})")
+                console.print(f"[cyan]下载合集[/cyan]: {mix_name} ({mix_id})")
                 await self._download_mix_by_id(mix_id)
                 fetched += 1
 
@@ -2573,10 +3004,10 @@ class UnifiedDownloader:
                 break
             cursor = mix_list_data.get('cursor', 0)
 
-        console.print(f"[green]閴?閻劍鍩涢崥鍫ユ肠娑撳娴囩€瑰本鍨氶敍灞藉彙婢跺嫮鎮?{fetched} 娑撶實/green]")
+        console.print(f"[green]✅ 获取合集列表完成，共 {fetched} 个[/green]")
 
     async def _fetch_user_mix_list(self, user_id: str, cursor: int = 0) -> Optional[Dict]:
-        """閼惧嘲褰囬悽銊﹀煕閸氬牓娉﹂崚妤勩€?"""
+        """获取用户合集列表"""
         try:
             params_list = [
                 f'sec_user_id={user_id}',
@@ -2604,14 +3035,15 @@ class UnifiedDownloader:
                 signed_params = self.utils.getXbogus(params)
                 full_url = f"{api_url}{signed_params}"
             except Exception as e:
-                logger.warning(f"閼惧嘲褰嘪-Bogus婢惰精瑙? {e}, 鐏忔繆鐦稉宥呯敨X-Bogus")
+                logger.warning(f"获取X-Bogus失败: {e}, 尝试使用默认X-Bogus")
                 full_url = f"{api_url}{params}"
 
-            logger.info(f"鐠囬攱鐪伴悽銊﹀煕閸氬牓娉﹂崚妤勩€? {full_url[:100]}...")
+            logger.info(f"请求用户合集列表: {full_url[:100]}...")
             async with aiohttp.ClientSession() as session:
                 async with session.get(full_url, headers=self.headers, timeout=10) as response:
+                    self._absorb_response_cookies(response)
                     if response.status != 200:
-                        logger.error(f"鐠囬攱鐪版径杈Е閿涘瞼濮搁幀浣虹垳: {response.status}")
+                        logger.error(f"请求失败，HTTP 状态码: {response.status}")
                         return None
                     text = await response.text()
                     if not text:
@@ -2621,14 +3053,14 @@ class UnifiedDownloader:
                     if data.get('status_code') == 0:
                         return data
                     else:
-                        logger.error(f"API鏉╂柨娲栭柨娆掝嚖: {data.get('status_msg', '閺堫亞鐓￠柨娆掝嚖')}")
+                        logger.error(f"API返回错误: {data.get('status_msg', '未知错误')}")
                         return None
         except Exception as e:
-            logger.error(f"閼惧嘲褰囬悽銊﹀煕閸氬牓娉﹂崚妤勩€冩径杈Е: {e}")
+            logger.error(f"获取用户合集列表失败: {e}")
         return None
 
     async def download_mix(self, url: str) -> bool:
-        """閺嶈宓侀崥鍫ユ肠闁剧偓甯存稉瀣祰閸氬牓娉﹂崘鍛閺堝缍旈崫?"""
+        """根据合集链接下载整个合集"""
         try:
             mix_id = None
             for pattern in [r'/collection/(\d+)', r'/mix/detail/(\d+)']:
@@ -2637,20 +3069,20 @@ class UnifiedDownloader:
                     mix_id = m.group(1)
                     break
             if not mix_id:
-                logger.error(f"閺冪姵纭舵禒搴℃値闂嗗棝鎽奸幒銉﹀絹閸欐湏D: {url}")
+                logger.error(f"无法从合集链接提取ID: {url}")
                 return False
             await self._download_mix_by_id(mix_id)
             return True
         except Exception as e:
-            logger.error(f"娑撳娴囬崥鍫ユ肠婢惰精瑙? {e}")
+            logger.error(f"下载合集失败: {e}")
             return False
 
     async def _download_mix_by_id(self, mix_id: str):
-        """閹稿鎮庨梿鍜篋娑撳娴囬崗銊╁劥娴ｆ粌鎼?"""
+        """根据合集 ID 下载合集"""
         cursor = 0
         downloaded = 0
 
-        console.print(f"\n[green]瀵偓婵绗呮潪钘夋値闂?{mix_id} ...[/green]")
+        console.print(f"\n[green]✅ 开始下载合集 {mix_id} ...[/green]")
 
         while True:
             await self.rate_limiter.acquire()
@@ -2671,10 +3103,10 @@ class UnifiedDownloader:
                 break
             cursor = data.get('cursor', 0)
 
-        console.print(f"[green]閴?閸氬牓娉︽稉瀣祰鐎瑰本鍨氶敍灞藉彙娑撳娴?{downloaded} 娑撶實/green]")
+        console.print(f"[green]✅ 合集下载完成，共 {downloaded} 个[/green]")
 
     async def _fetch_mix_awemes(self, mix_id: str, cursor: int = 0) -> Optional[Dict]:
-        """閼惧嘲褰囬崥鍫ユ肠娑撳缍旈崫浣稿灙鐞?"""
+        """获取合集作品列表"""
         try:
             params_list = [
                 f'mix_id={mix_id}',
@@ -2702,36 +3134,37 @@ class UnifiedDownloader:
                 signed_params = self.utils.getXbogus(params)
                 full_url = f"{api_url}{signed_params}"
             except Exception as e:
-                logger.warning(f"閼惧嘲褰嘪-Bogus婢惰精瑙? {e}, 鐏忔繆鐦稉宥呯敨X-Bogus")
+                logger.warning(f"获取X-Bogus失败: {e}, 尝试使用默认X-Bogus")
                 full_url = f"{api_url}{params}"
 
-            logger.info(f"鐠囬攱鐪伴崥鍫ユ肠娴ｆ粌鎼ч崚妤勩€? {full_url[:100]}...")
+            logger.info(f"请求合集作品列表: {full_url[:100]}...")
             async with aiohttp.ClientSession() as session:
                 async with session.get(full_url, headers=self.headers, timeout=10) as response:
+                    self._absorb_response_cookies(response)
                     if response.status != 200:
-                        logger.error(f"鐠囬攱鐪版径杈Е閿涘瞼濮搁幀浣虹垳: {response.status}")
+                        logger.error(f"请求失败，HTTP 状态码: {response.status}")
                         return None
                     text = await response.text()
                     if not text:
                         logger.error("Empty response body")
                         return None
                     data = json.loads(text)
-                    # USER_MIX 鏉╂柨娲栧▽鈩冩箒缂佺喍绔撮惃?status_code閿涘矁绻栭柌宀€娲块幒銉ㄧ箲閸?
+                    # USER_MIX 接口返回非 0 status_code 时视为失败
                     return data
         except Exception as e:
-            logger.error(f"閼惧嘲褰囬崥鍫ユ肠娴ｆ粌鎼ф径杈Е: {e}")
+            logger.error(f"获取合集作品列表失败: {e}")
         return None
 
     async def download_music(self, url: str) -> bool:
-        """閺嶈宓侀棅鍏呯妞ょ敻鎽奸幒銉ょ瑓鏉炰粙鐓舵稊鎰瑓閻ㄥ嫭澧嶉張澶夌稊閸濅緤绱欓弨顖涘瘮婢х偤鍣洪敍?"""
+        """根据音乐链接下载该音乐下的全部作品"""
         try:
-            # 閹绘劕褰?music_id
+            # 提取 music_id
             music_id = None
             m = re.search(r'/music/(\d+)', url)
             if m:
                 music_id = m.group(1)
             if not music_id:
-                logger.error(f"閺冪姵纭舵禒搴ㄧ叾娑旀劙鎽奸幒銉﹀絹閸欐湏D: {url}")
+                logger.error(f"无法从音乐链接提取ID: {url}")
                 return False
 
             cursor = 0
@@ -2742,7 +3175,7 @@ class UnifiedDownloader:
             except Exception:
                 limit_num = 0
 
-            console.print(f"\n[green]瀵偓婵绗呮潪浠嬬叾娑?{music_id} 娑撳娈戞担婊冩惂...[/green]")
+            console.print(f"\n[green]✅ 开始下载音乐 {music_id} 的作品...[/green]")
 
             while True:
                 await self.rate_limiter.acquire()
@@ -2755,7 +3188,7 @@ class UnifiedDownloader:
 
                 for aweme in aweme_list:
                     if limit_num > 0 and downloaded >= limit_num:
-                        console.print(f"[yellow]瀹歌尪鎻崚浼寸叾娑旀劒绗呮潪鑺ユ殶闁插繘妾洪崚? {limit_num}[/yellow]")
+                        console.print(f"[yellow]已设置音乐下载数量上限: {limit_num}[/yellow]")
                         return True
                     if self._should_skip_increment('music', aweme, music_id=music_id):
                         continue
@@ -2768,14 +3201,14 @@ class UnifiedDownloader:
                     break
                 cursor = data.get('cursor', 0)
 
-            console.print(f"[green]閴?闂婂厖绠版担婊冩惂娑撳娴囩€瑰本鍨氶敍灞藉彙娑撳娴?{downloaded} 娑撶實/green]")
+            console.print(f"[green]✅ 音乐作品下载完成，共 {downloaded} 个[/green]")
             return True
         except Exception as e:
-            logger.error(f"娑撳娴囬棅鍏呯妞ら潧銇戠拹? {e}")
+            logger.error(f"下载音乐页失败: {e}")
             return False
 
     async def _fetch_music_awemes(self, music_id: str, cursor: int = 0) -> Optional[Dict]:
-        """閼惧嘲褰囬棅鍏呯娑撳缍旈崫浣稿灙鐞?"""
+        """获取音乐作品列表"""
         try:
             params_list = [
                 f'music_id={music_id}',
@@ -2803,14 +3236,15 @@ class UnifiedDownloader:
                 signed_params = self.utils.getXbogus(params)
                 full_url = f"{api_url}{signed_params}"
             except Exception as e:
-                logger.warning(f"閼惧嘲褰嘪-Bogus婢惰精瑙? {e}, 鐏忔繆鐦稉宥呯敨X-Bogus")
+                logger.warning(f"获取X-Bogus失败: {e}, 尝试使用默认X-Bogus")
                 full_url = f"{api_url}{params}"
 
-            logger.info(f"鐠囬攱鐪伴棅鍏呯娴ｆ粌鎼ч崚妤勩€? {full_url[:100]}...")
+            logger.info(f"请求音乐作品列表: {full_url[:100]}...")
             async with aiohttp.ClientSession() as session:
                 async with session.get(full_url, headers=self.headers, timeout=10) as response:
+                    self._absorb_response_cookies(response)
                     if response.status != 200:
-                        logger.error(f"鐠囬攱鐪版径杈Е閿涘瞼濮搁幀浣虹垳: {response.status}")
+                        logger.error(f"请求失败，HTTP 状态码: {response.status}")
                         return None
                     text = await response.text()
                     if not text:
@@ -2819,11 +3253,11 @@ class UnifiedDownloader:
                     data = json.loads(text)
                     return data
         except Exception as e:
-            logger.error(f"閼惧嘲褰囬棅鍏呯娴ｆ粌鎼ф径杈Е: {e}")
+            logger.error(f"获取音乐作品列表失败: {e}")
         return None
     
     def _check_time_filter(self, aweme: Dict) -> bool:
-        """濡偓閺屻儲妞傞梻纾嬬箖濠?"""
+        """判断作品发布时间是否落在配置的时间区间内（按自然日，含首尾两天）"""
         start_time = self.config.get('start_time')
         end_time = self.config.get('end_time')
         
@@ -2851,15 +3285,21 @@ class UnifiedDownloader:
         if create_date is None:
             return True
         
+        # 按自然日比较：结束日期当天的作品仍应包含在内
+        create_day = create_date.date()
         if start_time:
-            start_date = datetime.strptime(start_time, '%Y-%m-%d')
-            if create_date < start_date:
-                return False
+            try:
+                if create_day < datetime.strptime(str(start_time), '%Y-%m-%d').date():
+                    return False
+            except ValueError:
+                logger.warning(f"start_time 格式无效（应为 YYYY-MM-DD）: {start_time}")
         
         if end_time:
-            end_date = datetime.strptime(end_time, '%Y-%m-%d')
-            if create_date > end_date:
-                return False
+            try:
+                if create_day > datetime.strptime(str(end_time), '%Y-%m-%d').date():
+                    return False
+            except ValueError:
+                logger.warning(f"end_time 格式无效（应为 YYYY-MM-DD）: {end_time}")
         
         return True
     
@@ -2999,6 +3439,75 @@ def _browser_fetch_aweme_helper_main(input_path: str):
     asyncio.run(runner())
 
 
+async def _refresh_session_command(config_path: str) -> int:
+    """刷新登录态并把 Cookie 写回本地，尽量少让用户重新扫码。
+
+    优先用浏览器真实导航（服务端会趁机下发新的 sessionid / sid_guard），
+    浏览器取不到时再退回接口请求。返回 0 表示登录态有效。
+    """
+    downloader = UnifiedDownloader(config_path)
+    await downloader._initialize_cookies_and_headers()
+
+    current = downloader._cookies_to_dict(downloader.cookies)
+    before = downloader._cookie_expiry_at(current)
+
+    console.print("[cyan]正在刷新登录态…[/cyan]")
+    refreshed: Dict[str, str] = {}
+    try:
+        refreshed = await downloader._fetch_cookies_via_browser()
+    except Exception as exc:
+        logger.warning(f"浏览器刷新登录态失败: {exc}")
+
+    login_keys = ('sessionid', 'sessionid_ss', 'sid_tt', 'passport_auth_status')
+    if refreshed and any(refreshed.get(k) for k in login_keys):
+        current.update(refreshed)
+        downloader.cookies = current
+        downloader.headers['Cookie'] = downloader._build_cookie_string()
+        downloader._persist_cookies(current)
+        console.print("[green]已通过浏览器刷新并保存登录态[/green]")
+    else:
+        console.print("[yellow]浏览器中未取到登录态，尝试通过接口请求刷新…[/yellow]")
+        urls = downloader.config.get('link') or []
+        if isinstance(urls, str):
+            urls = [urls]
+        touched = False
+        for url in list(urls)[:1]:
+            try:
+                if downloader.detect_content_type(url) == ContentType.USER:
+                    sec_uid = downloader.extract_id_from_url(url, ContentType.USER)
+                    if sec_uid:
+                        await downloader._fetch_user_profile(sec_uid)
+                        touched = True
+                else:
+                    aweme_id = downloader.extract_id_from_url(url)
+                    if aweme_id:
+                        await downloader._fetch_video_info(aweme_id)
+                        touched = True
+            except Exception as exc:
+                logger.warning(f"接口刷新失败: {exc}")
+        if touched:
+            current = downloader._cookies_to_dict(downloader.cookies)
+            downloader._persist_cookies(current)
+            console.print("[green]已通过接口请求刷新 Cookie 并保存[/green]")
+
+    current = downloader._cookies_to_dict(downloader.cookies)
+    after = downloader._cookie_expiry_at(current)
+    if after and (before is None or after > before):
+        gain = (after - (before or 0)) / 86400
+        console.print(f"[green]登录态已延长约 {gain:.1f} 天[/green]")
+
+    downloader._report_session_validity(current)
+    hint = downloader._cookie_expiry_hint(current)
+    if hint:
+        console.print(f"[yellow]{hint}[/yellow]")
+        console.print(
+            "[yellow]如仍需登录，请运行：python cookie_extractor.py[/yellow]"
+        )
+        return 1
+    console.print("[green]登录态有效，无需重新登录。[/green]")
+    return 0
+
+
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -3044,6 +3553,11 @@ def main():
         help='Disable pre-download backfill slicing check'
     )
     parser.add_argument(
+        '--refresh-session',
+        action='store_true',
+        help='刷新并保存登录态 Cookie（尽量延长免登录时间），不下载任何内容',
+    )
+    parser.add_argument(
         '--browser-recover-user-posts-helper',
         dest='browser_recover_helper_input',
         help=argparse.SUPPRESS,
@@ -3063,17 +3577,19 @@ def main():
     if args.browser_fetch_aweme_helper_input:
         _browser_fetch_aweme_helper_main(args.browser_fetch_aweme_helper_input)
         return
+    if args.refresh_session:
+        raise SystemExit(asyncio.run(_refresh_session_command(args.config)))
     
-    # 缂佸嫬鎮庨柊宥囩枂閺夈儲绨敍姘喘閸忓牆鎳℃禒銈堫攽
+    # 组装临时配置（命令行参数优先）
     temp_config = {}
     if args.url:
         temp_config['link'] = args.url
     
-    # 鐟曞棛娲婃穱婵嗙摠鐠侯垰绶?
+    # 输出目录覆盖
     if args.path:
         temp_config['path'] = args.path
     
-    # Cookie闁板秶鐤?
+    # Cookie 覆盖
     if args.auto_cookie:
         temp_config['auto_cookie'] = True
         temp_config['cookies'] = 'auto'
@@ -3083,9 +3599,9 @@ def main():
     if args.slice_backfill_on_run is not None:
         temp_config['slice_backfill_on_run'] = args.slice_backfill_on_run
     
-    # 婵″倹鐏夌€涙ê婀稉瀛樻闁板秶鐤嗛敍灞藉灟閻㈢喐鍨氭稉鈧稉顏冨閺冭埖鏋冩禒鏈电返閻滅増婀侀弸鍕偓鐘插毐閺侀濞囬悽?
+    # 存在配置文件时，读取后与命令行参数合并
     if temp_config:
-        # 閸氬牆鑻熼弬鍥︽闁板秶鐤嗛敍鍫濐洤鐎涙ê婀敍?
+        # 写出临时配置文件，交给 UnifiedDownloader 读取
         file_config = {}
         if os.path.exists(args.config):
             try:
@@ -3094,7 +3610,7 @@ def main():
             except Exception:
                 file_config = {}
         
-        # 閸忕厧顔愮粻鈧崠鏍暛閸?
+        # 兼容旧键名
         if 'links' in file_config and 'link' not in file_config:
             file_config['link'] = file_config['links']
         if 'output_dir' in file_config and 'path' not in file_config:
@@ -3109,17 +3625,17 @@ def main():
     else:
         config_path = args.config
     
-    # 鏉╂劘顢戞稉瀣祰閸?
+    # 执行下载
     try:
         downloader = UnifiedDownloader(config_path)
         asyncio.run(downloader.run())
     except KeyboardInterrupt:
-        console.print("\n[yellow]閳跨媴绗?閻劍鍩涙稉顓熸焽娑撳娴嘯/yellow]")
+        console.print("\n[yellow]⏹ 用户中断了下载[/yellow]")
     except Exception as e:
-        console.print(f"\n[red]閴?缁嬪绨鍌氱埗: {e}[/red]")
-        logger.exception("缁嬪绨鍌氱埗")
+        console.print(f"\n[red]❌ 运行异常: {e}[/red]")
+        logger.exception("运行异常")
     finally:
-        # 濞撳懐鎮婃稉瀛樻闁板秶鐤?
+        # 清理临时配置文件
         if args.url and os.path.exists('temp_config.yml'):
             os.remove('temp_config.yml')
 

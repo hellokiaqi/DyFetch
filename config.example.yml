@@ -1,5 +1,5 @@
 #######################################
-# ????? ?????????
+# 配置模板：复制为 config_simple.yml 后填写
 #######################################
 
 link:
@@ -13,6 +13,8 @@ path: ./Downloaded/
 music: true
 cover: true
 json: true
+
+# 视频切帧
 slice_videos: true
 slice_fps: 10
 slice_subdir: frames
@@ -20,12 +22,15 @@ slice_backfill_on_run: false
 auto_install_ffmpeg: true
 # ffmpeg_bin: ffmpeg
 
+# 时间过滤（留空表示不过滤），格式 YYYY-MM-DD
 start_time: ""
 end_time: ""
 
+# Cookie：auto 会自动读取 cookies.txt / cookies.pkl
 cookies: auto
-# ???
+# 或者直接填写 Cookie 字符串：
 # cookies: "msToken=YOUR_MS_TOKEN; ttwid=YOUR_TTWID; odin_tt=YOUR_ODIN_TT; ..."
+# 或者填写 Cookie 字典：
 # cookies:
 #   msToken: YOUR_MS_TOKEN
 #   ttwid: YOUR_TTWID
@@ -35,3 +40,13 @@ cookies: auto
 
 mode:
   - post
+
+# 浏览器兜底：接口返回不全时用 Playwright 补齐
+user_posts_browser_recovery: true
+user_posts_browser_headless: false
+# playwright_storage_state: storage_state.json
+
+# 单作品兜底：接口返回空（常见于登录态过期）时，用浏览器打开作品页取数据。
+# 公开作品即使未登录也能下载，开启后更稳；关闭则只走接口。
+single_aweme_browser_recovery: true
+single_aweme_browser_headless: true

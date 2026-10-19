@@ -98,6 +98,41 @@ def offline_checks(mod, workdir: Path) -> None:
         assert d.detect_content_type(f"https://www.douyin.com/user/{sec}?vid=7678693260676523112") == CT.VIDEO
         assert d.detect_content_type(f"https://www.douyin.com/user/{sec}") == CT.USER
 
+    def url_repair():
+        """脏链接应被自动修正：分享文案、缺协议、全角字符、纯 ID 等。"""
+        from utils.urlfix import extract_urls, repair_url
+
+        cases = [
+            ("https://www.douyin.com/video/7678693260676523112",
+             "https://www.douyin.com/video/7678693260676523112"),
+            ("www.douyin.com/video/7678693260676523112",
+             "https://www.douyin.com/video/7678693260676523112"),
+            ("douyin.com/video/7678693260676523112/",
+             "https://www.douyin.com/video/7678693260676523112"),
+            ("ｈｔｔｐｓ：／／ｗｗｗ．ｄｏｕｙｉｎ．ｃｏｍ／ｖｉｄｅｏ／123",
+             "https://www.douyin.com/video/123"),
+            ("https://www.douyin.com/video/123?&amp;from=share",
+             "https://www.douyin.com/video/123?from=share"),
+            ("  7.43 abc:/ 复制此链接，打开抖音搜索！https://v.douyin.com/iRGu2mBL/  ",
+             "https://v.douyin.com/iRGu2mBL"),
+            ("看看这个 https://www.douyin.com/note/123456，挺有意思",
+             "https://www.douyin.com/note/123456"),
+            ("7678693260676523112", "https://www.douyin.com/video/7678693260676523112"),
+            ("https://www.douyin.com/video/123?from=a&from=b",
+             "https://www.douyin.com/video/123?from=a"),
+            ("这不是链接", None),
+        ]
+        for raw, expected in cases:
+            got = repair_url(raw)
+            assert got == expected, f"repair_url({raw!r}) -> {got!r}, want {expected!r}"
+
+        blob = ("看 https://www.douyin.com/video/111111111111111111 和 "
+                "https://www.douyin.com/user/MS4wLjABAAAAbbb?vid=222222222222222222 "
+                "再看 https://www.douyin.com/video/111111111111111111")
+        urls = extract_urls(blob)
+        assert len(urls) == 2, urls
+        assert urls[0].endswith("/video/111111111111111111"), urls
+
     def content_types():
         d = mod.UnifiedDownloader(str(workdir / "c_off.yml"))
         eq(d.detect_content_type("https://www.douyin.com/video/123"), CT.VIDEO, "video")
@@ -359,6 +394,7 @@ def offline_checks(mod, workdir: Path) -> None:
     for name, fn in [
         ("content type routing", content_types),
         ("url routing matrix", url_matrix),
+        ("url repair", url_repair),
         ("id extraction", extract_ids),
         ("safe file names", safe_names),
         ("post folder naming", folder_names),

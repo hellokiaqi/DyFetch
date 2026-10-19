@@ -143,6 +143,19 @@ python downloader.py -c config_simple.yml --refresh-session
 
 或在界面「下载设置 → 续期登录」点一下。
 
+### 链接写得不规范也能用
+
+粘贴的内容会自动清洗，下列写法都能识别：
+
+```text
+7.43 abc:/ 复制此链接，打开抖音搜索！https://www.douyin.com/video/1234567890
+www.douyin.com/user/MS4wLjABAAAA...
+7678693260676523112                          （只给作品 ID）
+MS4wLjABAAAAeIy_ylr7h76dRXcXk4JDRFIhgWoRvOgavUTHJi3wX90  （只给 sec_user_id）
+```
+
+全角字符、`&amp;` 这类 HTML 实体、重复的查询参数、链接末尾的中文标点都会自动处理。
+
 ### 主页批量下载
 
 mode: post 时会把主页里的作品全部下载；

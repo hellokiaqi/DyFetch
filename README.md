@@ -59,6 +59,10 @@ python cookie_extractor.py
 
 This writes `cookies.txt`, `cookies.pkl` and `storage_state.json`, which DyFetch reads
 automatically.
+Links pasted from the app are cleaned before use. Share captions around the URL, a missing scheme,
+full-width characters, HTML entities, duplicated query parameters and trailing punctuation are all
+handled, and a bare post ID or `sec_user_id` is expanded into the matching URL.
+
 
 **Manual**
 
@@ -236,6 +240,16 @@ page in turn. That is noticeably slower: on a profile holding 26 posts, a run wi
 finished 24 posts with no failures in roughly four minutes.
 
 Liked posts and collections still depend on the API and need a valid session.
+
+Without a valid session the profile page only renders its first page of posts, and the platform does
+not return later pages to anonymous requests. DyFetch reports the gap rather than failing silently:
+
+```
+主页显示 36 个作品，本次拿到 18 个，还有 18 个需要登录后才能看到。
+```
+
+To fetch the complete list, sign in once with `python cookie_extractor.py --auto`, or press
+**重新登录** on the settings page of the GUI.
 
 ## Troubleshooting
 

@@ -269,7 +269,17 @@ class CookieExtractor:
 async def main():
     """主函数"""
     extractor = CookieExtractor()
-    
+
+    # --auto：非交互模式，供界面或脚本直接调用（弹出浏览器等待扫码登录）
+    if "--auto" in sys.argv[1:]:
+        console.print("[cyan]自动登录提取 Cookie，请在打开的浏览器窗口中完成登录…[/cyan]")
+        cookies = await extractor.extract_cookies(headless=False)
+        if cookies:
+            console.print("\n[green]✅ Cookie 提取完成，可以直接下载了[/green]")
+            return 0
+        console.print("\n[red]❌ 未能提取 Cookie[/red]")
+        return 1
+
     console.print("\n[cyan]请选择提取方式：[/cyan]")
     console.print("1. 自动登录提取（推荐）")
     console.print("2. 从已登录浏览器提取")
@@ -312,7 +322,7 @@ async def main():
 
 if __name__ == '__main__':
     try:
-        asyncio.run(main())
+        raise SystemExit(asyncio.run(main()) or 0)
     except KeyboardInterrupt:
         console.print("\n[yellow]用户取消操作[/yellow]")
     except Exception as e:

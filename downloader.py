@@ -56,6 +56,7 @@ from apiproxy.douyin.result import Result
 from apiproxy.common.utils import Utils
 from apiproxy.douyin.auth.cookie_manager import AutoCookieManager
 from apiproxy.douyin.database import DataBase
+from utils.urlfix import extract_urls, repair_url
 
 # 配置日志
 logging.basicConfig(
@@ -2768,6 +2769,17 @@ class UnifiedDownloader:
                         "请重新运行 cookie_extractor.py 后再试。[/red]"
                     )
         
+        # 未登录时主页只暴露第一页作品，这里把差距说清楚，避免用户以为程序坏了
+        if expected_post_count and downloaded < expected_post_count:
+            missing = expected_post_count - downloaded
+            console.print(
+                f"[yellow]主页显示 {expected_post_count} 个作品，本次拿到 {downloaded} 个，"
+                f"还有 {missing} 个需要登录后才能看到。[/yellow]"
+            )
+            console.print(
+                "[yellow]登录态有效时接口会自动翻页，可下载完整列表；"
+                "未登录时页面只提供第一页。[/yellow]"
+            )
         console.print(f"[green]User posts completed, downloaded {downloaded} item(s).[/green]")
     
     async def _fetch_user_posts(self, user_id: str, cursor: int = 0) -> Optional[Dict]:
@@ -3392,9 +3404,24 @@ class UnifiedDownloader:
             console.print("[cyan]Checking previous downloaded videos for missing slices...[/cyan]")
             await asyncio.to_thread(self._slice_backfill_existing_videos)
 
-        urls = self.config.get('link', [])
-        if isinstance(urls, str):
-            urls = [urls]
+        raw_urls = self.config.get('link', [])
+        if isinstance(raw_urls, str):
+            raw_urls = [raw_urls]
+        # 用户粘贴的往往是分享文案、缺协议头的地址或纯 ID，统一清洗后再用
+        urls: List[str] = []
+        for item in raw_urls:
+            repaired_list = extract_urls(str(item))
+            if not repaired_list:
+                logger.warning("无法识别的链接，已跳过: %s", item)
+                console.print(f"[yellow]跳过无法识别的链接: {str(item)[:60]}[/yellow]")
+                continue
+            for repaired in repaired_list:
+                if repaired != str(item).strip():
+                    logger.info("已修正链接: %s -> %s", item, repaired)
+                    console.print(f"[dim]已修正链接: {str(item)[:40]} -> {repaired[:80]}[/dim]")
+                if repaired not in urls:
+                    urls.append(repaired)
+        self.config['link'] = urls
         if not urls:
             console.print("[red]No URL found to download[/red]")
             return

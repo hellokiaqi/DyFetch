@@ -33,6 +33,11 @@ from urllib.parse import parse_qs, urlparse
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+_PKG_ROOT = Path(__file__).resolve().parent
+if str(_PKG_ROOT) not in sys.path:
+    sys.path.insert(0, str(_PKG_ROOT))
+from utils.urlfix import extract_urls  # noqa: E402
+
 APP_NAME = "DyFetch"
 APP_SUBTITLE = "抖音下载器 · 队列 / 批量下载 / 抽帧"
 APP_VERSION = "3.2"
@@ -1048,6 +1053,35 @@ class DownloaderUI:
         self.session_ok = ok
         self._render_session_label()
 
+    def login_now(self) -> None:
+        """运行 cookie_extractor.py --auto，弹出浏览器完成登录并写回凭据。"""
+        if self._suspended:
+            return
+        if self.process and self.process.poll() is None:
+            self.set_status("已有任务正在运行，请稍后再登录", "warn")
+            return
+        cmd = [sys.executable, str(self.base_dir / "cookie_extractor.py"), "--auto"]
+        self.append_log("\n" + "─" * 68 + "\n")
+        self.append_log(f"$ {' '.join(cmd)}\n")
+        env = os.environ.copy()
+        env.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONUNBUFFERED="1")
+        env.pop("COLUMNS", None)
+        try:
+            self.process = subprocess.Popen(
+                cmd, cwd=str(self.base_dir), stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, env=env, text=True, encoding="utf-8",
+                errors="replace", bufsize=1,
+            )
+        except Exception as exc:
+            messagebox.showerror("启动失败", str(exc), parent=self.root)
+            return
+        self.started_at = time.monotonic()
+        self.stats = {"total": 0, "success": 0, "failed": 0, "skipped": 0}
+        self._set_running(True)
+        self.set_status("已打开浏览器，请完成登录…", "ok")
+        threading.Thread(target=self._read_output, daemon=True).start()
+        self._tick_elapsed()
+
     def refresh_session(self) -> None:
         """调用 downloader.py --refresh-session 续期登录态。"""
         if self._suspended:
@@ -1405,7 +1439,7 @@ class DownloaderUI:
             wrapper,
             text="上限填 0 表示不限制。保存后写入 ui_run_config.yml，"
                  "不会改动你的原始配置文件。\n"
-                 "「续期登录」会读取浏览器里的最新登录态并回写 Cookie，尽量免去重新扫码。",
+                 "「续期登录」读取浏览器里的最新登录态并回写 Cookie；「重新登录」会打开浏览器扫码，用于登录态彻底失效时。",
             bg=COLOR["card"], fg=COLOR["text_mute"], font=F.ui(8), wraplength=420,
             justify=tk.LEFT,
         ).grid(row=5, column=0, columnspan=4, sticky="w", pady=(12, 0))
@@ -1417,6 +1451,8 @@ class DownloaderUI:
         PillButton(actions, "恢复默认", command=self._reset_settings, kind="ghost", width=84,
                    height=30, font=F.ui(9)).pack(side=tk.LEFT, padx=(8, 0))
         PillButton(actions, "续期登录", command=self.refresh_session, kind="secondary",
+                   width=88, height=30, font=F.ui(9)).pack(side=tk.LEFT, padx=(8, 0))
+        PillButton(actions, "重新登录", command=self.login_now, kind="secondary",
                    width=88, height=30, font=F.ui(9)).pack(side=tk.LEFT, padx=(8, 0))
 
     def _reset_settings(self) -> None:
@@ -1530,7 +1566,7 @@ class DownloaderUI:
             self.set_status("请先输入链接", "warn")
             self.url_entry.focus_set()
             return
-        urls = URL_RE.findall(raw) or ([raw] if raw.startswith("http") else [])
+        urls = extract_urls(raw)
         if not urls:
             self.set_status("没有识别到有效链接", "warn")
             return

@@ -33,7 +33,7 @@ from urllib.parse import parse_qs, urlparse
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-APP_NAME = "DyinDL"
+APP_NAME = "DyFetch"
 APP_SUBTITLE = "抖音下载器 · 队列 / 批量下载 / 抽帧"
 APP_VERSION = "3.2"
 

@@ -316,7 +316,10 @@ ui_history.json / ui_state.json / ui_run_config.yml  界面状态与设置
 `dy-downloader/utils/xbogus.py` 中的 X-Bogus 签名实现来自该项目，原始版权声明保留在文件头部。
 该文件以 Apache-2.0 授权，再分发时需一并保留其版权与许可声明。
 
-### 许可说明
+### 许可
 
-上游项目分别采用 MIT 与 Apache-2.0 授权。本项目在此基础上修改与再分发，需保留上述版权与许可声明。
-Apache-2.0 部分（`xbogus.py`）不要求衍生作品整体采用同一许可证，但其版权声明不得移除。
+本项目采用 MIT 许可，见 [LICENSE](LICENSE)。
+
+第三方组件的版权与许可声明见 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)，
+Apache-2.0 全文见 [licenses/Apache-2.0.txt](licenses/Apache-2.0.txt)。
+Apache-2.0 部分不要求衍生作品整体采用同一许可证，但其版权与许可声明不得移除。
